@@ -31,6 +31,16 @@ export interface RoomType {
 export type GenerationStep =
   | 'idle'
   | 'analyzing'
-  | 'generating'
+  | 'generating_view1'
+  | 'generating_view2'
+  | 'generating_view3'
   | 'completed'
   | 'failed';
+
+export type ViewType = 'perspective' | 'side' | 'topdown';
+
+export interface GeneratedView {
+  type: ViewType;
+  label: string;
+  imageUrl: string;
+}

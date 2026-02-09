@@ -59,15 +59,14 @@ export default function CreatePage() {
         )}
 
         {/* Loading state */}
-        {(generationStatus === 'analyzing' || generationStatus === 'generating') && (
+        {(generationStatus === 'analyzing' ||
+          generationStatus === 'generating_view1' ||
+          generationStatus === 'generating_view2' ||
+          generationStatus === 'generating_view3') && (
           <div className="flex flex-col items-center gap-4 py-12">
             <div className="h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent" />
-            <p className="text-muted">
-              {generationStatus === 'analyzing'
-                ? 'Grundriss wird analysiert...'
-                : 'Dein Raumdesign wird generiert...'}
-            </p>
-            <p className="text-xs text-muted">Das dauert normalerweise 15-30 Sekunden</p>
+            <p className="text-muted">Designs werden generiert...</p>
+            <p className="text-xs text-muted">3 Ansichten — das dauert ca. 1-2 Minuten</p>
           </div>
         )}
       </div>

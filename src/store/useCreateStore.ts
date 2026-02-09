@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { RoomStyleId, RoomTypeId, GenerationStep } from '@/types';
+import type { RoomStyleId, RoomTypeId, GenerationStep, GeneratedView } from '@/types';
 
 interface CreateStore {
   // Upload
@@ -20,7 +20,7 @@ interface CreateStore {
 
   // Generation
   generationStatus: GenerationStep;
-  resultImageUrl: string | null;
+  resultViews: GeneratedView[];
   errorMessage: string | null;
 
   // Step tracking
@@ -33,7 +33,8 @@ interface CreateStore {
   setAnalysisResult: (result: string) => void;
   setStripeSessionId: (id: string) => void;
   setGenerationStatus: (status: GenerationStep) => void;
-  setResultImageUrl: (url: string) => void;
+  addResultView: (view: GeneratedView) => void;
+  setCompleted: () => void;
   setError: (message: string) => void;
   setCurrentStep: (step: 1 | 2 | 3 | 4) => void;
   reset: () => void;
@@ -46,7 +47,7 @@ const initialState = {
   analysisResult: null,
   stripeSessionId: null,
   generationStatus: 'idle' as GenerationStep,
-  resultImageUrl: null,
+  resultViews: [] as GeneratedView[],
   errorMessage: null,
   currentStep: 1 as const,
 };
@@ -62,8 +63,10 @@ export const useCreateStore = create<CreateStore>()(
       setAnalysisResult: (result) => set({ analysisResult: result }),
       setStripeSessionId: (id) => set({ stripeSessionId: id }),
       setGenerationStatus: (status) => set({ generationStatus: status }),
-      setResultImageUrl: (url) =>
-        set({ resultImageUrl: url, generationStatus: 'completed', currentStep: 4 }),
+      addResultView: (view) =>
+        set((state) => ({ resultViews: [...state.resultViews, view] })),
+      setCompleted: () =>
+        set({ generationStatus: 'completed', currentStep: 4 }),
       setError: (message) => set({ errorMessage: message, generationStatus: 'failed' }),
       setCurrentStep: (step) => set({ currentStep: step }),
       reset: () => set(initialState),
@@ -71,11 +74,13 @@ export const useCreateStore = create<CreateStore>()(
     {
       name: 'roomvision-create',
       storage: createJSONStorage(() =>
-        typeof window !== 'undefined' ? sessionStorage : ({
-          getItem: () => null,
-          setItem: () => {},
-          removeItem: () => {},
-        })
+        typeof window !== 'undefined'
+          ? sessionStorage
+          : {
+              getItem: () => null,
+              setItem: () => {},
+              removeItem: () => {},
+            }
       ),
       partialize: (state) => ({
         previewUrl: state.previewUrl,

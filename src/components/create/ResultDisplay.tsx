@@ -1,61 +1,146 @@
 'use client';
 
-import { Download, RotateCcw } from 'lucide-react';
+import { useState } from 'react';
+import { Download, RotateCcw, Eye, Layers, ArrowDown } from 'lucide-react';
 import { useCreateStore } from '@/store/useCreateStore';
 import Button from '@/components/ui/Button';
 
+const viewIcons = {
+  perspective: Eye,
+  side: Layers,
+  topdown: ArrowDown,
+};
+
 export default function ResultDisplay() {
-  const { resultImageUrl, previewUrl, reset } = useCreateStore();
+  const { resultViews, previewUrl, reset } = useCreateStore();
+  const [activeTab, setActiveTab] = useState(0);
 
-  if (!resultImageUrl) return null;
+  if (resultViews.length === 0) return null;
 
-  const handleDownload = () => {
+  const activeView = resultViews[activeTab];
+
+  const handleDownload = (imageUrl: string, label: string) => {
     const link = document.createElement('a');
-    link.href = resultImageUrl;
-    link.download = `roomvision-design-${Date.now()}.png`;
+    link.href = imageUrl;
+    link.download = `roomvision-${label.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
+  const handleDownloadAll = () => {
+    resultViews.forEach((view, i) => {
+      setTimeout(() => {
+        handleDownload(view.imageUrl, view.label);
+      }, i * 500);
+    });
+  };
+
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Original */}
-        {previewUrl && (
-          <div>
-            <p className="mb-2 text-sm font-medium text-muted">Grundriss (Original)</p>
-            <div className="overflow-hidden rounded-2xl border border-border">
+      {/* Original floor plan */}
+      {previewUrl && (
+        <div>
+          <p className="mb-2 text-sm font-medium text-muted">Grundriss (Original)</p>
+          <div className="overflow-hidden rounded-2xl border border-border max-w-sm">
+            <img
+              src={previewUrl}
+              alt="Original Grundriss"
+              className="w-full object-contain max-h-[250px]"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* View tabs */}
+      <div>
+        <div className="flex gap-2 border-b border-border pb-0">
+          {resultViews.map((view, i) => {
+            const Icon = viewIcons[view.type] || Eye;
+            return (
+              <button
+                key={view.type}
+                onClick={() => setActiveTab(i)}
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-all -mb-px ${
+                  activeTab === i
+                    ? 'border-brand text-brand'
+                    : 'border-transparent text-muted hover:text-foreground hover:border-border'
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {view.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Active view */}
+        {activeView && (
+          <div className="mt-4">
+            <div className="overflow-hidden rounded-2xl border border-brand/30 shadow-lg shadow-brand/5">
               <img
-                src={previewUrl}
-                alt="Original Grundriss"
-                className="w-full object-contain max-h-[400px]"
+                src={activeView.imageUrl}
+                alt={activeView.label}
+                className="w-full object-contain max-h-[600px]"
               />
             </div>
           </div>
         )}
-
-        {/* Generated */}
-        <div>
-          <p className="mb-2 text-sm font-medium text-brand">KI-Visualisierung</p>
-          <div className="overflow-hidden rounded-2xl border border-brand/30 shadow-lg shadow-brand/5">
-            <img
-              src={resultImageUrl}
-              alt="Generiertes Raumdesign"
-              className="w-full object-contain max-h-[400px]"
-            />
-          </div>
-        </div>
       </div>
 
+      {/* All views grid */}
+      {resultViews.length > 1 && (
+        <div>
+          <p className="mb-3 text-sm font-medium text-muted">Alle Ansichten</p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {resultViews.map((view, i) => (
+              <button
+                key={view.type}
+                onClick={() => setActiveTab(i)}
+                className={`overflow-hidden rounded-xl border-2 transition-all ${
+                  activeTab === i
+                    ? 'border-brand shadow-lg shadow-brand/10'
+                    : 'border-border hover:border-brand/30'
+                }`}
+              >
+                <img
+                  src={view.imageUrl}
+                  alt={view.label}
+                  className="w-full object-contain aspect-[3/2]"
+                />
+                <p className="p-2 text-center text-xs font-medium">{view.label}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
       <div className="flex flex-col gap-3 sm:flex-row">
-        <Button size="lg" onClick={handleDownload} className="flex-1">
-          <Download className="h-4 w-4" />
-          HD-Bild herunterladen
-        </Button>
-        <Button size="lg" variant="secondary" onClick={reset} className="flex-1">
+        {activeView && (
+          <Button
+            size="lg"
+            onClick={() => handleDownload(activeView.imageUrl, activeView.label)}
+            className="flex-1"
+          >
+            <Download className="h-4 w-4" />
+            Aktuelle Ansicht herunterladen
+          </Button>
+        )}
+        {resultViews.length > 1 && (
+          <Button
+            size="lg"
+            variant="secondary"
+            onClick={handleDownloadAll}
+            className="flex-1"
+          >
+            <Download className="h-4 w-4" />
+            Alle {resultViews.length} Ansichten herunterladen
+          </Button>
+        )}
+        <Button size="lg" variant="ghost" onClick={reset}>
           <RotateCcw className="h-4 w-4" />
-          Neues Design erstellen
+          Neues Design
         </Button>
       </div>
     </div>
