@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getStripeServer } from '@/lib/stripe';
 import { ROOM_STYLES, ROOM_TYPES, PRICE_PER_RENDER, CURRENCY } from '@/lib/constants';
+
+const isDemoMode = !process.env.STRIPE_SECRET_KEY;
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +17,15 @@ export async function POST(request: NextRequest) {
 
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 
+    // Demo mode: skip Stripe, redirect directly to success
+    if (isDemoMode) {
+      const demoSessionId = `demo_${crypto.randomUUID()}`;
+      const successUrl = `${baseUrl}/success?session_id=${demoSessionId}`;
+      return NextResponse.json({ url: successUrl });
+    }
+
+    // Production: use Stripe
+    const { getStripeServer } = await import('@/lib/stripe');
     const session = await getStripeServer().checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getStripeServer } from '@/lib/stripe';
 import { generateRoomVisualization, buildGenerationPrompt } from '@/lib/openai';
 import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
 
 export const maxDuration = 60;
+
+const isDemoMode = !process.env.STRIPE_SECRET_KEY;
 
 // Track used session IDs to prevent double-generation
 const usedSessions = new Set<string>();
@@ -12,7 +13,6 @@ export async function POST(request: NextRequest) {
   try {
     const { sessionId, imageData, style, roomType, analysis } = await request.json();
 
-    // Verify payment
     if (!sessionId) {
       return NextResponse.json({ error: 'Keine Session-ID' }, { status: 400 });
     }
@@ -25,10 +25,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const session = await getStripeServer().checkout.sessions.retrieve(sessionId);
+    // Verify payment: skip in demo mode, check Stripe in production
+    if (!isDemoMode && !sessionId.startsWith('demo_')) {
+      const { getStripeServer } = await import('@/lib/stripe');
+      const session = await getStripeServer().checkout.sessions.retrieve(sessionId);
 
-    if (session.payment_status !== 'paid') {
-      return NextResponse.json({ error: 'Zahlung nicht abgeschlossen' }, { status: 402 });
+      if (session.payment_status !== 'paid') {
+        return NextResponse.json({ error: 'Zahlung nicht abgeschlossen' }, { status: 402 });
+      }
     }
 
     // Mark session as used
@@ -57,7 +61,6 @@ export async function POST(request: NextRequest) {
     const resultBase64 = await generateRoomVisualization(base64, prompt);
 
     if (!resultBase64) {
-      // Remove from used sessions so user can retry
       usedSessions.delete(sessionId);
       return NextResponse.json({ error: 'Bildgenerierung fehlgeschlagen' }, { status: 500 });
     }

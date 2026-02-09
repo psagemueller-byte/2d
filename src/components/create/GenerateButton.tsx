@@ -25,7 +25,6 @@ export default function GenerateButton() {
         body: JSON.stringify({
           style: selectedStyle,
           roomType: selectedRoomType,
-          imageData: previewUrl,
         }),
       });
 
@@ -55,12 +54,12 @@ export default function GenerateButton() {
         {loading ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
-            Weiterleitung zu Stripe...
+            Wird vorbereitet...
           </>
         ) : (
           <>
             <Sparkles className="h-4 w-4" />
-            Design generieren — $2.99
+            Design generieren
           </>
         )}
       </Button>
