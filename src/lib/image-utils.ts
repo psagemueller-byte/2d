@@ -1,12 +1,13 @@
-const MAX_DIMENSION = 2048;
+const MAX_DIMENSION = 1024;
+const JPEG_QUALITY = 0.7;
 
 /**
- * Resize an image to fit within MAX_DIMENSION while maintaining aspect ratio.
- * Returns a base64 data URL (without the data:image prefix).
+ * Resize an image data URL to fit within MAX_DIMENSION.
+ * Returns a compressed JPEG data URL to stay within Vercel's 4.5MB body limit.
  */
-export function resizeImage(file: File): Promise<string> {
+export function compressImageDataUrl(dataUrl: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const img = new Image();
+    const img = new window.Image();
     img.onload = () => {
       let { width, height } = img;
 
@@ -27,13 +28,13 @@ export function resizeImage(file: File): Promise<string> {
       }
 
       ctx.drawImage(img, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL('image/png');
-      // Return base64 without the data:image/png;base64, prefix
-      resolve(dataUrl.split(',')[1]);
+      // Use JPEG for much smaller file size
+      const compressed = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+      resolve(compressed);
     };
 
     img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = URL.createObjectURL(file);
+    img.src = dataUrl;
   });
 }
 

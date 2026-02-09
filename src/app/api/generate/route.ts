@@ -11,7 +11,12 @@ const usedSessions = new Set<string>();
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId, imageData, style, roomType, analysis } = await request.json();
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: 'OpenAI API Key nicht konfiguriert' }, { status: 500 });
+    }
+
+    const body = await request.json();
+    const { sessionId, imageData, style, roomType, analysis } = body;
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Keine Session-ID' }, { status: 400 });
@@ -42,8 +47,14 @@ export async function POST(request: NextRequest) {
     const styleData = ROOM_STYLES.find((s) => s.id === style);
     const roomData = ROOM_TYPES.find((r) => r.id === roomType);
 
-    if (!styleData || !roomData || !imageData) {
-      return NextResponse.json({ error: 'Ungültige Eingaben' }, { status: 400 });
+    if (!styleData || !roomData) {
+      usedSessions.delete(sessionId);
+      return NextResponse.json({ error: 'Ungültiger Stil oder Raumtyp' }, { status: 400 });
+    }
+
+    if (!imageData) {
+      usedSessions.delete(sessionId);
+      return NextResponse.json({ error: 'Kein Bild übergeben' }, { status: 400 });
     }
 
     // Strip data URL prefix if present
@@ -62,14 +73,15 @@ export async function POST(request: NextRequest) {
 
     if (!resultBase64) {
       usedSessions.delete(sessionId);
-      return NextResponse.json({ error: 'Bildgenerierung fehlgeschlagen' }, { status: 500 });
+      return NextResponse.json({ error: 'Bildgenerierung lieferte kein Ergebnis' }, { status: 500 });
     }
 
     return NextResponse.json({ imageData: `data:image/png;base64,${resultBase64}` });
-  } catch (error) {
-    console.error('Generate error:', error);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unbekannter Fehler';
+    console.error('Generate error:', message);
     return NextResponse.json(
-      { error: 'Generierung fehlgeschlagen. Bitte versuche es erneut.' },
+      { error: `Generierung fehlgeschlagen: ${message}` },
       { status: 500 }
     );
   }

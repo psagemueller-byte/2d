@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useCreateStore } from '@/store/useCreateStore';
+import { compressImageDataUrl } from '@/lib/image-utils';
 import ResultDisplay from '@/components/create/ResultDisplay';
 import { Suspense } from 'react';
 
@@ -34,18 +35,30 @@ function SuccessContent() {
 
     const generate = async () => {
       try {
-        // Step 1: Analyze floor plan
+        // Compress image before sending to API (Vercel has 4.5MB body limit)
         setGenerationStatus('analyzing');
+        let compressedImage: string;
+        try {
+          compressedImage = await compressImageDataUrl(previewUrl);
+        } catch {
+          compressedImage = previewUrl;
+        }
+
+        // Step 1: Analyze floor plan
         const analyzeRes = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageData: previewUrl }),
+          body: JSON.stringify({ imageData: compressedImage }),
         });
 
         let analysis = '';
         if (analyzeRes.ok) {
           const analyzeData = await analyzeRes.json();
           analysis = analyzeData.analysis;
+        } else {
+          const errData = await analyzeRes.json().catch(() => ({}));
+          console.warn('Analyze failed:', analyzeRes.status, errData.error);
+          // Continue without analysis — generation can still work
         }
 
         // Step 2: Generate visualization
@@ -55,7 +68,7 @@ function SuccessContent() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sessionId,
-            imageData: previewUrl,
+            imageData: compressedImage,
             style: selectedStyle,
             roomType: selectedRoomType,
             analysis,
@@ -64,13 +77,15 @@ function SuccessContent() {
 
         if (!generateRes.ok) {
           const errorData = await generateRes.json().catch(() => ({}));
-          throw new Error(errorData.error || 'Generierung fehlgeschlagen');
+          throw new Error(errorData.error || `Server-Fehler (${generateRes.status})`);
         }
 
         const { imageData } = await generateRes.json();
         setResultImageUrl(imageData);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten');
+        const msg = err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten';
+        console.error('Generation failed:', msg);
+        setError(msg);
       }
     };
 
@@ -117,7 +132,7 @@ function SuccessContent() {
         </h1>
         {generationStatus !== 'completed' && generationStatus !== 'failed' && (
           <p className="mt-3 text-muted">
-            Zahlung erfolgreich. Die KI arbeitet an deinem Raumdesign.
+            Die KI arbeitet an deinem Raumdesign.
           </p>
         )}
       </div>
