@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { ViewType } from '@/types';
+import type { ViewType, RoomTypeId } from '@/types';
 
 let _openai: OpenAI | null = null;
 
@@ -60,6 +60,127 @@ Answer in English. Be structured and use bullet points.`,
   return response.choices[0].message.content || '';
 }
 
+interface DetectedRoomRaw {
+  name: string;
+  type: string;
+  description: string;
+}
+
+const ROOM_TYPE_MAP: Record<string, RoomTypeId> = {
+  'living room': 'living-room',
+  'living': 'living-room',
+  'wohnzimmer': 'living-room',
+  'lounge': 'living-room',
+  'family room': 'living-room',
+  'bedroom': 'bedroom',
+  'schlafzimmer': 'bedroom',
+  'master bedroom': 'bedroom',
+  'guest bedroom': 'bedroom',
+  'kids room': 'bedroom',
+  'kinderzimmer': 'bedroom',
+  'nursery': 'bedroom',
+  'kitchen': 'kitchen',
+  'küche': 'kitchen',
+  'kitchenette': 'kitchen',
+  'bathroom': 'bathroom',
+  'badezimmer': 'bathroom',
+  'bath': 'bathroom',
+  'toilet': 'bathroom',
+  'wc': 'bathroom',
+  'powder room': 'bathroom',
+  'ensuite': 'bathroom',
+  'office': 'office',
+  'büro': 'office',
+  'study': 'office',
+  'home office': 'office',
+  'arbeitszimmer': 'office',
+  'workspace': 'office',
+  'dining room': 'living-room',
+  'esszimmer': 'living-room',
+  'hallway': 'living-room',
+  'flur': 'living-room',
+  'corridor': 'living-room',
+  'entrance': 'living-room',
+  'laundry': 'bathroom',
+  'storage': 'office',
+  'balcony': 'living-room',
+  'balkon': 'living-room',
+};
+
+function mapRoomType(rawType: string): RoomTypeId {
+  const lower = rawType.toLowerCase().trim();
+  if (ROOM_TYPE_MAP[lower]) return ROOM_TYPE_MAP[lower];
+  // Fuzzy match: check if any key is contained in the raw type
+  for (const [key, value] of Object.entries(ROOM_TYPE_MAP)) {
+    if (lower.includes(key) || key.includes(lower)) return value;
+  }
+  return 'living-room'; // Default fallback
+}
+
+export async function detectRoomsInFloorPlan(
+  imageBase64: string
+): Promise<{ id: string; name: string; type: RoomTypeId; description: string }[]> {
+  const response = await getOpenAI().chat.completions.create({
+    model: 'gpt-4o',
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert architect analyzing floor plans. Your task is to identify ALL separate rooms in the floor plan image.
+
+For EACH room you find, provide:
+- "name": A clear German name for the room (e.g., "Wohnzimmer", "Küche", "Schlafzimmer", "Badezimmer", "Büro", "Flur", "Balkon")
+- "type": The English room type (one of: "living room", "bedroom", "kitchen", "bathroom", "office", "dining room", "hallway", "storage", "laundry", "balcony")
+- "description": A detailed description in English of this specific room including:
+  - Approximate dimensions/proportions
+  - Position of doors (which walls, how many)
+  - Position of windows (which walls, how many)
+  - Any built-in features (kitchen counters, bathroom fixtures, closets)
+  - Shape of the room
+  - Notable features
+
+Return ONLY a JSON object with this format:
+{
+  "rooms": [
+    { "name": "Wohnzimmer", "type": "living room", "description": "Rectangular room approximately 5m x 4m..." },
+    { "name": "Küche", "type": "kitchen", "description": "L-shaped room approximately 3m x 4m..." }
+  ]
+}
+
+Be thorough — identify EVERY distinct room, even small ones like WC, storage, or hallways. If the floor plan shows labels, use those names. If not, infer from the room features and layout.`,
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:image/jpeg;base64,${imageBase64}`,
+              detail: 'high',
+            },
+          },
+          {
+            type: 'text',
+            text: 'Identify ALL rooms in this floor plan. Return the result as JSON.',
+          },
+        ],
+      },
+    ],
+    max_tokens: 2000,
+  });
+
+  const content = response.choices[0].message.content || '{}';
+  const parsed = JSON.parse(content) as { rooms?: DetectedRoomRaw[] };
+  const rooms = parsed.rooms || [];
+
+  return rooms.map((room, index) => ({
+    id: `room_${index + 1}`,
+    name: room.name || `Raum ${index + 1}`,
+    type: mapRoomType(room.type || 'living room'),
+    description: room.description || '',
+  }));
+}
+
 export async function generateRoomVisualization(
   imageBase64: string,
   prompt: string
@@ -91,8 +212,14 @@ export function buildMultiViewPrompt(
   styleName: string,
   stylePromptModifier: string,
   roomTypeName: string,
-  analysis: string
+  analysis: string,
+  roomName?: string,
+  roomDescription?: string
 ): string {
+  const roomFocusInstruction = roomName
+    ? `\n\nIMPORTANT — ROOM FOCUS: This floor plan shows multiple rooms. You MUST focus ONLY on the room called "${roomName}" (${roomTypeName}). Ignore all other rooms in the floor plan. Generate the visualization ONLY for this specific room.\n\nRoom details: ${roomDescription || 'See analysis below.'}\n`
+    : '';
+
   return `CRITICAL INSTRUCTIONS — FOLLOW EXACTLY:
 
 1. FLOOR PLAN FIDELITY: The attached image is a floor plan. You MUST preserve the EXACT room layout:
@@ -100,7 +227,7 @@ export function buildMultiViewPrompt(
    - Walls, doors, and windows in their EXACT positions
    - Do NOT add, remove, or move any structural elements
    - Do NOT change the room dimensions
-
+${roomFocusInstruction}
 2. FURNITURE PLACEMENT: Place furniture according to this analysis (furniture must be in these EXACT positions in ALL views):
 ${analysis}
 

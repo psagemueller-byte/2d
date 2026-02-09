@@ -6,7 +6,7 @@ import { useCreateStore } from '@/store/useCreateStore';
 import { compressImageDataUrl } from '@/lib/image-utils';
 import ResultDisplay from '@/components/create/ResultDisplay';
 import { Suspense } from 'react';
-import type { ViewType, GeneratedView, GenerationStep } from '@/types';
+import type { ViewType, GeneratedView, GenerationStep, DetectedRoom, RoomResult } from '@/types';
 
 const VIEWS: { type: ViewType; label: string; step: GenerationStep }[] = [
   { type: 'perspective', label: 'Perspektivansicht', step: 'generating_view1' },
@@ -21,22 +21,26 @@ function SuccessContent() {
 
   const {
     previewUrl,
-    selectedStyle,
-    selectedRoomType,
+    detectedRooms,
     generationStatus,
     resultViews,
+    roomResults,
     errorMessage,
     setGenerationStatus,
     addResultView,
+    addRoomResult,
     setCompleted,
     setError,
     setStripeSessionId,
     setCurrentStep,
   } = useCreateStore();
 
+  const selectedRooms = detectedRooms.filter((r) => r.selected && r.selectedStyle);
+
   useEffect(() => {
     if (!sessionId || hasStarted.current) return;
-    if (!previewUrl || !selectedStyle || !selectedRoomType) return;
+    if (!previewUrl) return;
+    if (selectedRooms.length === 0) return;
 
     hasStarted.current = true;
     setStripeSessionId(sessionId);
@@ -68,36 +72,56 @@ function SuccessContent() {
           console.warn('Analyze failed, continuing without analysis');
         }
 
-        // Step 2: Generate 3 views sequentially
-        for (const view of VIEWS) {
-          setGenerationStatus(view.step);
+        // Step 2: Generate views for each selected room
+        for (let roomIdx = 0; roomIdx < selectedRooms.length; roomIdx++) {
+          const room = selectedRooms[roomIdx];
+          const roomViews: GeneratedView[] = [];
 
-          const generateRes = await fetch('/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId,
-              imageData: compressedImage,
-              style: selectedStyle,
-              roomType: selectedRoomType,
-              analysis,
-              viewType: view.type,
-            }),
-          });
+          for (const view of VIEWS) {
+            setGenerationStatus(view.step);
 
-          if (!generateRes.ok) {
-            const errorData = await generateRes.json().catch(() => ({}));
-            console.error(`View ${view.type} failed:`, errorData.error);
-            // Continue with other views even if one fails
-            continue;
+            const generateRes = await fetch('/api/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId,
+                imageData: compressedImage,
+                style: room.selectedStyle,
+                roomType: room.type,
+                analysis,
+                viewType: view.type,
+                roomId: room.id,
+                roomName: room.name,
+                roomDescription: room.description,
+              }),
+            });
+
+            if (!generateRes.ok) {
+              const errorData = await generateRes.json().catch(() => ({}));
+              console.error(`Room ${room.name} View ${view.type} failed:`, errorData.error);
+              continue;
+            }
+
+            const { imageData } = await generateRes.json();
+            const generatedView: GeneratedView = {
+              type: view.type,
+              label: `${room.name} — ${view.label}`,
+              imageUrl: imageData,
+              roomId: room.id,
+            };
+
+            roomViews.push(generatedView);
+            addResultView(generatedView);
           }
 
-          const { imageData } = await generateRes.json();
-          addResultView({
-            type: view.type,
-            label: view.label,
-            imageUrl: imageData,
-          });
+          // Add room result
+          if (roomViews.length > 0) {
+            addRoomResult({
+              roomId: room.id,
+              roomName: room.name,
+              views: roomViews,
+            });
+          }
         }
 
         setCompleted();
@@ -112,10 +136,10 @@ function SuccessContent() {
   }, [
     sessionId,
     previewUrl,
-    selectedStyle,
-    selectedRoomType,
+    selectedRooms,
     setGenerationStatus,
     addResultView,
+    addRoomResult,
     setCompleted,
     setError,
     setStripeSessionId,
@@ -123,7 +147,7 @@ function SuccessContent() {
   ]);
 
   // Missing data
-  if (!previewUrl || !selectedStyle || !selectedRoomType) {
+  if (!previewUrl || selectedRooms.length === 0) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-24 text-center">
         <h1 className="text-2xl font-bold">Sitzung abgelaufen</h1>
@@ -146,23 +170,35 @@ function SuccessContent() {
     generationStatus === 'generating_view2' ||
     generationStatus === 'generating_view3';
 
-  const statusLabels: Record<string, string> = {
-    analyzing: 'Grundriss wird analysiert...',
-    generating_view1: 'Perspektivansicht wird generiert... (1/3)',
-    generating_view2: 'Frontalansicht wird generiert... (2/3)',
-    generating_view3: 'Draufsicht wird generiert... (3/3)',
-  };
-
+  // Calculate progress based on rooms and views
+  const totalViews = selectedRooms.length * 3;
+  const completedViews = resultViews.length;
   const progressPercent =
     generationStatus === 'analyzing'
-      ? 10
-      : generationStatus === 'generating_view1'
-      ? 30
-      : generationStatus === 'generating_view2'
-      ? 60
-      : generationStatus === 'generating_view3'
-      ? 85
-      : 100;
+      ? 5
+      : totalViews > 0
+      ? Math.min(95, 10 + (completedViews / totalViews) * 85)
+      : generationStatus === 'completed'
+      ? 100
+      : 10;
+
+  // Find which room is currently being generated
+  const currentRoomIdx = Math.floor(completedViews / 3);
+  const currentRoom = selectedRooms[currentRoomIdx];
+  const currentViewIdx = completedViews % 3;
+
+  const statusLabels: Record<string, string> = {
+    analyzing: 'Grundriss wird analysiert...',
+    generating_view1: currentRoom
+      ? `${currentRoom.name}: Perspektivansicht (${currentRoomIdx + 1}/${selectedRooms.length})`
+      : 'Perspektivansicht wird generiert...',
+    generating_view2: currentRoom
+      ? `${currentRoom.name}: Frontalansicht (${currentRoomIdx + 1}/${selectedRooms.length})`
+      : 'Frontalansicht wird generiert...',
+    generating_view3: currentRoom
+      ? `${currentRoom.name}: Draufsicht (${currentRoomIdx + 1}/${selectedRooms.length})`
+      : 'Draufsicht wird generiert...',
+  };
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
@@ -176,7 +212,7 @@ function SuccessContent() {
         </h1>
         {isGenerating && (
           <p className="mt-3 text-muted">
-            3 Ansichten werden generiert — bitte hab etwas Geduld.
+            {selectedRooms.length} {selectedRooms.length === 1 ? 'Raum' : 'Räume'} mit je 3 Ansichten — bitte hab etwas Geduld.
           </p>
         )}
       </div>
@@ -199,22 +235,29 @@ function SuccessContent() {
                 {statusLabels[generationStatus] || 'Wird generiert...'}
               </p>
               <p className="text-xs text-muted">
-                Jede Ansicht dauert ca. 15-30 Sekunden
+                {completedViews}/{totalViews} Ansichten fertig
               </p>
             </div>
 
             {/* Show already generated views while others are loading */}
-            {resultViews.length > 0 && (
-              <div className="mt-8 space-y-4">
+            {roomResults.length > 0 && (
+              <div className="mt-8 space-y-6">
                 <p className="text-sm font-medium text-center text-muted">Bereits fertig:</p>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {resultViews.map((view) => (
-                    <div key={view.type} className="overflow-hidden rounded-xl border border-brand/30">
-                      <img src={view.imageUrl} alt={view.label} className="w-full object-contain" />
-                      <p className="p-2 text-center text-xs font-medium text-brand">{view.label}</p>
+                {roomResults.map((roomResult) => (
+                  <div key={roomResult.roomId} className="space-y-2">
+                    <p className="text-sm font-semibold text-brand">{roomResult.roomName}</p>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {roomResult.views.map((view) => (
+                        <div key={`${view.roomId}_${view.type}`} className="overflow-hidden rounded-xl border border-brand/30">
+                          <img src={view.imageUrl} alt={view.label} className="w-full object-contain" />
+                          <p className="p-2 text-center text-xs font-medium text-brand">
+                            {VIEWS.find((v) => v.type === view.type)?.label || view.type}
+                          </p>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

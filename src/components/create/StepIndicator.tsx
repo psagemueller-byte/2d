@@ -5,7 +5,7 @@ import { useCreateStore } from '@/store/useCreateStore';
 
 const steps = [
   { num: 1, label: 'Hochladen' },
-  { num: 2, label: 'Konfigurieren' },
+  { num: 2, label: 'Räume wählen' },
   { num: 3, label: 'Bezahlen' },
   { num: 4, label: 'Ergebnis' },
 ];

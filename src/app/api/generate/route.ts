@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { sessionId, imageData, style, roomType, analysis, viewType } = body;
+    const { sessionId, imageData, style, roomType, analysis, viewType, roomId, roomName, roomDescription } = body;
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Keine Session-ID' }, { status: 400 });
@@ -29,8 +29,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Ungültiger View-Typ' }, { status: 400 });
     }
 
-    // Check if this specific view for this session was already generated
-    const sessionViewKey = `${sessionId}_${viewType}`;
+    // Check if this specific view for this session+room was already generated
+    const sessionViewKey = roomId
+      ? `${sessionId}_${roomId}_${viewType}`
+      : `${sessionId}_${viewType}`;
+
     if (usedSessionViews.has(sessionViewKey)) {
       return NextResponse.json(
         { error: 'Diese Ansicht wurde bereits generiert' },
@@ -68,13 +71,15 @@ export async function POST(request: NextRequest) {
     // Strip data URL prefix if present
     const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData;
 
-    // Build the view-specific prompt
+    // Build the view-specific prompt (with optional room focus)
     const prompt = buildMultiViewPrompt(
       viewType as ViewType,
       styleData.name,
       styleData.promptModifier,
       roomData.name,
-      analysis || 'A standard room floor plan layout.'
+      analysis || 'A standard room floor plan layout.',
+      roomName,
+      roomDescription
     );
 
     // Generate the image

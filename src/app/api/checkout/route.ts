@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ROOM_STYLES, ROOM_TYPES, PRICE_PER_RENDER, CURRENCY } from '@/lib/constants';
+import { PRICE_PER_RENDER, CURRENCY } from '@/lib/constants';
 
 const isDemoMode = !process.env.STRIPE_SECRET_KEY;
 
 export async function POST(request: NextRequest) {
   try {
-    const { style, roomType } = await request.json();
+    const body = await request.json();
+    const { rooms, quantity } = body;
 
-    // Validate inputs
-    const styleData = ROOM_STYLES.find((s) => s.id === style);
-    const roomData = ROOM_TYPES.find((r) => r.id === roomType);
-
-    if (!styleData || !roomData) {
-      return NextResponse.json({ error: 'Ungültiger Stil oder Raumtyp' }, { status: 400 });
+    // Validate: must have at least one room selected
+    if (!rooms || !Array.isArray(rooms) || rooms.length === 0) {
+      return NextResponse.json({ error: 'Keine Räume ausgewählt' }, { status: 400 });
     }
+
+    const roomCount = quantity || rooms.length;
 
     // Auto-detect base URL from request headers
     const host = request.headers.get('host') || 'localhost:3000';
@@ -27,6 +27,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ url: successUrl });
     }
 
+    // Build room description for Stripe
+    const roomNames = rooms.map((r: { name: string }) => r.name).join(', ');
+
     // Production: use Stripe
     const { getStripeServer } = await import('@/lib/stripe');
     const session = await getStripeServer().checkout.sessions.create({
@@ -37,17 +40,17 @@ export async function POST(request: NextRequest) {
           price_data: {
             currency: CURRENCY,
             product_data: {
-              name: 'RoomVision Render',
-              description: `${styleData.name} ${roomData.name} Visualisierung`,
+              name: 'RoomVision Raumvisualisierung',
+              description: `${roomCount} ${roomCount === 1 ? 'Raum' : 'Räume'}: ${roomNames} (je 3 Ansichten)`,
             },
             unit_amount: PRICE_PER_RENDER,
           },
-          quantity: 1,
+          quantity: roomCount,
         },
       ],
       metadata: {
-        style,
-        roomType,
+        roomCount: String(roomCount),
+        roomNames,
       },
       success_url: `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/create?cancelled=true`,

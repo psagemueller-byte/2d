@@ -43,4 +43,20 @@ export interface GeneratedView {
   type: ViewType;
   label: string;
   imageUrl: string;
+  roomId?: string;
+}
+
+export interface DetectedRoom {
+  id: string;
+  name: string;
+  type: RoomTypeId;
+  description: string;
+  selected: boolean;
+  selectedStyle?: RoomStyleId;
+}
+
+export interface RoomResult {
+  roomId: string;
+  roomName: string;
+  views: GeneratedView[];
 }
