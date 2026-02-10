@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJob, updateJob, addResult } from '@/lib/generation-store';
-import { generateRoomVisualization, buildMultiViewPrompt } from '@/lib/openai';
+import { generateRoomVisualization, buildMultiViewPrompt, beautifyRenderedImage } from '@/lib/openai';
 import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
 import type { ViewType } from '@/types';
 
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Job nicht gefunden' }, { status: 404 });
   }
 
-  // If job is not processing and has remaining tasks, trigger next view generation
+  // If job is not processing and has remaining tasks, trigger next view
   if (
     !job.isProcessing &&
     job.status === 'generating' &&
@@ -35,17 +35,35 @@ export async function GET(request: NextRequest) {
       const roomData = ROOM_TYPES.find((r) => r.id === nextTask.roomType);
 
       if (styleData && roomData) {
-        const prompt = buildMultiViewPrompt(
-          nextTask.viewType as ViewType,
-          styleData.name,
-          styleData.promptModifier,
-          roomData.name,
-          job.analysis,
-          nextTask.roomName,
-          nextTask.roomDescription
-        );
+        let resultBase64 = '';
 
-        const resultBase64 = await generateRoomVisualization(job.imageData, prompt);
+        if (nextTask.taskType === 'beautify' && nextTask.renderedImageData) {
+          // ── 3D Pipeline: Beautify the pre-rendered 3D image ──
+          const renderBase64 = nextTask.renderedImageData.includes(',')
+            ? nextTask.renderedImageData.split(',')[1]
+            : nextTask.renderedImageData;
+
+          resultBase64 = await beautifyRenderedImage(
+            renderBase64,
+            styleData.name,
+            styleData.promptModifier,
+            nextTask.viewType as ViewType,
+            roomData.name
+          );
+        } else {
+          // ── Legacy Pipeline: Generate from floor plan ──
+          const prompt = buildMultiViewPrompt(
+            nextTask.viewType as ViewType,
+            styleData.name,
+            styleData.promptModifier,
+            roomData.name,
+            job.analysis,
+            nextTask.roomName,
+            nextTask.roomDescription
+          );
+
+          resultBase64 = await generateRoomVisualization(job.imageData, prompt);
+        }
 
         if (resultBase64) {
           addResult(sessionId, {

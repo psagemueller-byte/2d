@@ -2,10 +2,10 @@
 
 import { ROOM_TYPES } from '@/lib/constants';
 import { useCreateStore } from '@/store/useCreateStore';
-import { Sofa, Bed, CookingPot, Bath, Monitor } from 'lucide-react';
+import { Sofa, Bed, CookingPot, Bath, Monitor, type LucideIcon } from 'lucide-react';
 import type { RoomTypeId } from '@/types';
 
-const roomIcons: Record<RoomTypeId, React.ElementType> = {
+const roomIcons: Record<RoomTypeId, LucideIcon> = {
   'living-room': Sofa,
   bedroom: Bed,
   kitchen: CookingPot,

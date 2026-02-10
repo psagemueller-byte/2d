@@ -24,6 +24,8 @@ export interface GenerationTask {
   style: string;
   viewType: string;
   viewLabel: string;
+  taskType?: 'generate' | 'beautify';        // 'beautify' for 3D pipeline
+  renderedImageData?: string;                  // base64 PNG from client 3D render
 }
 
 export interface GenerationJob {

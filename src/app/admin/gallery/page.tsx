@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Check, X, Trash2, Loader2, Eye, Clock, Ban } from 'lucide-react';
+import { Check, X, Trash2, Loader2, Eye, Clock, Ban, type LucideIcon } from 'lucide-react';
 import type { GalleryEntry } from '@/types/gallery';
 
 type Tab = 'pending' | 'approved' | 'rejected';
@@ -57,7 +57,7 @@ export default function AdminGalleryPage() {
 
   const filtered = entries.filter((e) => e.status === activeTab);
 
-  const tabConfig: { id: Tab; label: string; icon: React.ElementType; count: number }[] = [
+  const tabConfig: { id: Tab; label: string; icon: LucideIcon; count: number }[] = [
     { id: 'pending', label: 'Ausstehend', icon: Clock, count: entries.filter((e) => e.status === 'pending').length },
     { id: 'approved', label: 'Freigegeben', icon: Check, count: entries.filter((e) => e.status === 'approved').length },
     { id: 'rejected', label: 'Abgelehnt', icon: Ban, count: entries.filter((e) => e.status === 'rejected').length },

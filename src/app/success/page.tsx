@@ -1,14 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useCreateStore } from '@/store/useCreateStore';
 import { compressImageDataUrl } from '@/lib/image-utils';
 import ResultDisplay from '@/components/create/ResultDisplay';
-import { Suspense } from 'react';
+import { getFurnitureForRoom } from '@/lib/furniture-registry';
+import { placeFurniture } from '@/lib/furniture-placer';
 import type { RoomResult, GeneratedView, ViewType } from '@/types';
+import type { RenderedView, PlacedFurniture } from '@/types/scene3d';
 
-const POLL_INTERVAL = 4000; // Poll every 4 seconds
+// Lazy load the heavy 3D scene component
+const RoomScene = lazy(() => import('@/components/3d/RoomScene'));
+
+const POLL_INTERVAL = 4000;
 
 const VIEW_LABELS: Record<string, string> = {
   perspective: 'Perspektivansicht',
@@ -59,13 +64,20 @@ function SuccessContent() {
   const [serverStatus, setServerStatus] = useState<string>('pending');
   const processedResultsRef = useRef(0);
 
+  // 3D rendering state
+  const [renderingRoom, setRenderingRoom] = useState<string | null>(null);
+  const [renderedViews, setRenderedViews] = useState<RenderedView[]>([]);
+  const [allRoomsRendered, setAllRoomsRendered] = useState(false);
+  const [currentRoomForRender, setCurrentRoomForRender] = useState(0);
+
+  // Check if any room has 3D geometry (use 3D pipeline)
+  const has3DGeometry = selectedRooms.some((r) => r.geometry);
+
   // Build room results from poll results
   const processResults = useCallback(
     (results: PollResult[]) => {
-      // Only process new results
       if (results.length <= processedResultsRef.current) return;
 
-      // Group by room
       const roomMap = new Map<string, { roomId: string; roomName: string; views: GeneratedView[] }>();
 
       for (const r of results) {
@@ -80,12 +92,7 @@ function SuccessContent() {
         });
       }
 
-      // Only add newly completed rooms
-      // We need to find rooms that have all 3 views and haven't been added yet
-      const existingRoomIds = new Set(roomResults.map((rr) => rr.roomId));
-
       for (const [roomId, data] of roomMap) {
-        // Check if this room has more views than what we've already added
         const existingRoom = roomResults.find((rr) => rr.roomId === roomId);
         if (!existingRoom && data.views.length > 0) {
           addRoomResult({
@@ -93,9 +100,6 @@ function SuccessContent() {
             roomName: data.roomName,
             views: data.views,
           });
-        } else if (existingRoom && data.views.length > existingRoom.views.length) {
-          // Room has more views now — we need to replace it
-          // Since we can't update, we'll track this differently
         }
       }
 
@@ -120,23 +124,15 @@ function SuccessContent() {
       if (data.status === 'analyzing') {
         setGenerationStatus('analyzing');
       } else if (data.status === 'generating') {
-        // Map to view step based on completed count
-        const viewStep = (data.completedViews % 3) as 0 | 1 | 2;
-        const steps = ['generating_view1', 'generating_view2', 'generating_view3'] as const;
-        setGenerationStatus(steps[viewStep]);
+        setGenerationStatus('beautifying');
       }
 
-      // Process new results
       if (data.results && data.results.length > 0) {
         processResults(data.results);
       }
 
-      // Job complete
       if (data.status === 'completed') {
-        // Final process of all results
-        if (data.results) {
-          processResults(data.results);
-        }
+        if (data.results) processResults(data.results);
         setCompleted();
         if (pollRef.current) {
           clearInterval(pollRef.current);
@@ -144,7 +140,6 @@ function SuccessContent() {
         }
       }
 
-      // Job failed
       if (data.status === 'failed' && data.error) {
         setError(data.error);
         if (pollRef.current) {
@@ -153,11 +148,30 @@ function SuccessContent() {
         }
       }
     } catch {
-      // Network error (phone asleep etc.) — just retry next interval
+      // Network error — retry next interval
     }
   }, [sessionId, setGenerationStatus, setCompleted, setError, processResults]);
 
-  // Kickoff generation
+  // Handle 3D render complete for a room
+  const handleRoomRenderComplete = useCallback(
+    (views: RenderedView[]) => {
+      setRenderedViews((prev) => [...prev, ...views]);
+
+      // Move to next room
+      const nextIdx = currentRoomForRender + 1;
+      if (nextIdx < selectedRooms.length) {
+        setCurrentRoomForRender(nextIdx);
+        setRenderingRoom(selectedRooms[nextIdx].id);
+      } else {
+        // All rooms rendered
+        setAllRoomsRendered(true);
+        setRenderingRoom(null);
+      }
+    },
+    [currentRoomForRender, selectedRooms]
+  );
+
+  // ── Kickoff: 3D pipeline or legacy ──
   useEffect(() => {
     if (!sessionId || hasStarted.current) return;
     if (!previewUrl) return;
@@ -166,25 +180,76 @@ function SuccessContent() {
     hasStarted.current = true;
     setStripeSessionId(sessionId);
     setCurrentStep(4);
-    setGenerationStatus('analyzing');
 
-    const kickoff = async () => {
-      try {
-        // Compress image
-        let compressedImage: string;
+    if (has3DGeometry) {
+      // 3D Pipeline: Start rendering in browser
+      setGenerationStatus('rendering_3d');
+      setRenderingRoom(selectedRooms[0].id);
+      setCurrentRoomForRender(0);
+    } else {
+      // Legacy Pipeline: Send to server
+      setGenerationStatus('analyzing');
+
+      const kickoff = async () => {
         try {
-          compressedImage = await compressImageDataUrl(previewUrl);
-        } catch {
-          compressedImage = previewUrl;
-        }
+          let compressedImage: string;
+          try {
+            compressedImage = await compressImageDataUrl(previewUrl);
+          } catch {
+            compressedImage = previewUrl;
+          }
 
-        // Send single kickoff request
+          const res = await fetch('/api/generate-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              imageData: compressedImage,
+              rooms: selectedRooms.map((r) => ({
+                id: r.id,
+                name: r.name,
+                type: r.type,
+                style: r.selectedStyle,
+                description: r.description,
+              })),
+            }),
+          });
+
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || 'Generierung konnte nicht gestartet werden');
+          }
+
+          pollRef.current = setInterval(poll, POLL_INTERVAL);
+          poll();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten';
+          setError(msg);
+        }
+      };
+
+      kickoff();
+    }
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [sessionId, previewUrl, selectedRooms, has3DGeometry, setStripeSessionId, setCurrentStep, setGenerationStatus, setError, poll]);
+
+  // ── After 3D renders are complete, send to server for beautification ──
+  useEffect(() => {
+    if (!allRoomsRendered || !sessionId) return;
+    if (renderedViews.length === 0) return;
+
+    setGenerationStatus('beautifying');
+
+    const sendForBeautification = async () => {
+      try {
         const res = await fetch('/api/generate-all', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sessionId,
-            imageData: compressedImage,
             rooms: selectedRooms.map((r) => ({
               id: r.id,
               name: r.name,
@@ -192,17 +257,21 @@ function SuccessContent() {
               style: r.selectedStyle,
               description: r.description,
             })),
+            renderedViews: renderedViews.map((rv) => ({
+              roomId: rv.roomId,
+              viewType: rv.viewType,
+              imageData: rv.dataUrl,
+            })),
           }),
         });
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Generierung konnte nicht gestartet werden');
+          throw new Error(data.error || 'Beautification konnte nicht gestartet werden');
         }
 
-        // Start polling
+        // Start polling for beautification results
         pollRef.current = setInterval(poll, POLL_INTERVAL);
-        // Also poll immediately after kickoff response
         poll();
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten';
@@ -210,22 +279,20 @@ function SuccessContent() {
       }
     };
 
-    kickoff();
+    sendForBeautification();
+  }, [allRoomsRendered, renderedViews, sessionId, selectedRooms, setGenerationStatus, setError, poll]);
 
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-      }
-    };
-  }, [sessionId, previewUrl, selectedRooms, setStripeSessionId, setCurrentStep, setGenerationStatus, setError, poll]);
-
-  // Also handle visibility change (phone wakes up)
+  // Visibility change handler
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && sessionId && generationStatus !== 'completed' && generationStatus !== 'failed') {
-        // Phone woke up — poll immediately
+      if (
+        document.visibilityState === 'visible' &&
+        sessionId &&
+        generationStatus !== 'completed' &&
+        generationStatus !== 'failed' &&
+        generationStatus !== 'rendering_3d'
+      ) {
         poll();
-        // Restart polling interval if it was cleared
         if (!pollRef.current) {
           pollRef.current = setInterval(poll, POLL_INTERVAL);
         }
@@ -256,24 +323,33 @@ function SuccessContent() {
 
   const isGenerating =
     generationStatus === 'analyzing' ||
+    generationStatus === 'rendering_3d' ||
+    generationStatus === 'beautifying' ||
     generationStatus === 'generating_view1' ||
     generationStatus === 'generating_view2' ||
     generationStatus === 'generating_view3';
 
-  const progressPercent =
-    serverStatus === 'analyzing'
-      ? 5
-      : totalViews > 0
-      ? Math.min(95, 10 + (completedViews / totalViews) * 85)
-      : generationStatus === 'completed'
-      ? 100
-      : 10;
+  const is3DRendering = generationStatus === 'rendering_3d';
 
-  // Current room being generated
+  const progressPercent = is3DRendering
+    ? Math.min(30, (renderedViews.length / Math.max(1, selectedRooms.length * 3)) * 30)
+    : serverStatus === 'analyzing'
+    ? 5
+    : totalViews > 0
+    ? Math.min(95, 30 + (completedViews / totalViews) * 65)
+    : generationStatus === 'completed'
+    ? 100
+    : 10;
+
   const currentRoomIdx = Math.floor(completedViews / 3);
   const currentRoom = selectedRooms[currentRoomIdx];
   const currentViewIdx = completedViews % 3;
   const viewNames = ['Perspektivansicht', 'Frontalansicht', 'Draufsicht'];
+
+  // Get the room currently being 3D rendered
+  const room3DRendering = renderingRoom
+    ? selectedRooms.find((r) => r.id === renderingRoom)
+    : null;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
@@ -287,7 +363,8 @@ function SuccessContent() {
         </h1>
         {isGenerating && (
           <p className="mt-3 text-muted">
-            {selectedRooms.length} {selectedRooms.length === 1 ? 'Raum' : 'Räume'} mit je 3 Ansichten — du kannst den Bildschirm ruhig ausschalten, die Generierung läuft weiter.
+            {selectedRooms.length} {selectedRooms.length === 1 ? 'Raum' : 'Räume'} mit je 3 Ansichten
+            {!is3DRendering && ' — du kannst den Bildschirm ruhig ausschalten, die Generierung läuft weiter.'}
           </p>
         )}
       </div>
@@ -306,15 +383,23 @@ function SuccessContent() {
             <div className="flex flex-col items-center gap-2">
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
               <p className="text-base font-medium">
-                {serverStatus === 'analyzing'
+                {is3DRendering
+                  ? `3D-Szene wird aufgebaut... (${renderedViews.length}/${selectedRooms.length * 3} Ansichten)`
+                  : generationStatus === 'beautifying'
+                  ? currentRoom
+                    ? `Beautification: ${currentRoom.name} ${viewNames[currentViewIdx] || ''} (${currentRoomIdx + 1}/${selectedRooms.length})`
+                    : 'Bilder werden fotorealistisch aufbereitet...'
+                  : serverStatus === 'analyzing'
                   ? 'Grundriss wird analysiert...'
                   : currentRoom
                   ? `${currentRoom.name}: ${viewNames[currentViewIdx] || 'Generierung'} (${currentRoomIdx + 1}/${selectedRooms.length})`
                   : 'Wird generiert...'}
               </p>
-              <p className="text-xs text-muted">
-                {completedViews}/{totalViews} Ansichten fertig
-              </p>
+              {!is3DRendering && (
+                <p className="text-xs text-muted">
+                  {completedViews}/{totalViews} Ansichten fertig
+                </p>
+              )}
             </div>
 
             {/* Show already generated room results */}
@@ -339,6 +424,22 @@ function SuccessContent() {
               </div>
             )}
           </div>
+        )}
+
+        {/* 3D Scene (offscreen rendering) */}
+        {is3DRendering && room3DRendering && room3DRendering.geometry && room3DRendering.selectedStyle && (
+          <Suspense fallback={null}>
+            <RoomScene
+              geometry={room3DRendering.geometry}
+              furniture={placeFurniture(
+                room3DRendering.geometry,
+                getFurnitureForRoom(room3DRendering.type, room3DRendering.selectedStyle)
+              )}
+              style={room3DRendering.selectedStyle}
+              onRenderComplete={handleRoomRenderComplete}
+              autoCapture
+            />
+          </Suspense>
         )}
 
         {/* Final Result */}

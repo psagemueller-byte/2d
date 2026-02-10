@@ -31,6 +31,8 @@ export interface RoomType {
 export type GenerationStep =
   | 'idle'
   | 'analyzing'
+  | 'rendering_3d'
+  | 'beautifying'
   | 'generating_view1'
   | 'generating_view2'
   | 'generating_view3'
@@ -46,6 +48,8 @@ export interface GeneratedView {
   roomId?: string;
 }
 
+import type { Room3DData } from './scene3d';
+
 export interface DetectedRoom {
   id: string;
   name: string;
@@ -53,6 +57,7 @@ export interface DetectedRoom {
   description: string;
   selected: boolean;
   selectedStyle?: RoomStyleId;
+  geometry?: Room3DData;
 }
 
 export interface RoomResult {

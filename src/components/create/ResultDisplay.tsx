@@ -1,12 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { Download, RotateCcw, Eye, Layers, ArrowDown, Home, Share2, Check, Loader2 } from 'lucide-react';
+import { Download, RotateCcw, Eye, Layers, ArrowDown, Home, Share2, Check, Loader2, type LucideIcon } from 'lucide-react';
 import { useCreateStore } from '@/store/useCreateStore';
 import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
 import Button from '@/components/ui/Button';
 
-const viewIcons: Record<string, React.ElementType> = {
+const viewIcons: Record<string, LucideIcon> = {
   perspective: Eye,
   side: Layers,
   topdown: ArrowDown,

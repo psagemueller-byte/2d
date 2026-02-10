@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { ViewType, RoomTypeId } from '@/types';
+import type { Room3DData, Wall3D, Door3D, Window3D } from '@/types/scene3d';
 
 let _openai: OpenAI | null = null;
 
@@ -179,6 +180,248 @@ Be thorough — identify EVERY distinct room, even small ones like WC, storage, 
     type: mapRoomType(room.type || 'living room'),
     description: room.description || '',
   }));
+}
+
+// ── 3D Geometry Detection ──
+
+interface DetectedRoomWithGeometryRaw {
+  name: string;
+  type: string;
+  description: string;
+  geometry: {
+    width: number;
+    depth: number;
+    height: number;
+    walls: { start: [number, number]; end: [number, number] }[];
+    doors: { wallIndex: number; positionAlongWall: number; width: number }[];
+    windows: { wallIndex: number; positionAlongWall: number; width: number; height: number; sillHeight: number }[];
+  };
+}
+
+/**
+ * Detects rooms AND extracts structured 3D geometry for Three.js rendering.
+ * Returns room info + wall coordinates, door/window positions in meters.
+ */
+export async function detectRoomsWithGeometry(
+  imageBase64: string
+): Promise<{ id: string; name: string; type: RoomTypeId; description: string; geometry: Room3DData }[]> {
+  const response = await getOpenAI().chat.completions.create({
+    model: 'gpt-4o',
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert architect analyzing floor plans. Extract ALL rooms with precise 3D geometry data for constructing a 3D model.
+
+For EACH room, provide:
+- "name": German room name (e.g., "Wohnzimmer", "Küche", "Schlafzimmer")
+- "type": English room type (one of: "living room", "bedroom", "kitchen", "bathroom", "office", "dining room", "hallway", "storage", "laundry", "balcony")
+- "description": Brief English description of the room
+- "geometry": Precise measurements for 3D reconstruction:
+
+GEOMETRY FORMAT:
+- "width": room width in meters (x-axis)
+- "depth": room depth in meters (z-axis)
+- "height": ceiling height in meters (default 2.6 if not visible)
+- "walls": Array of wall segments. Each wall has:
+  - "start": [x, z] coordinates in meters (origin = bottom-left corner of room)
+  - "end": [x, z] coordinates in meters
+  For a simple rectangular room of 5m × 4m, walls would be:
+  [
+    {"start": [0, 0], "end": [5, 0]},       // south wall
+    {"start": [5, 0], "end": [5, 4]},       // east wall
+    {"start": [5, 4], "end": [0, 4]},       // north wall
+    {"start": [0, 4], "end": [0, 0]}        // west wall
+  ]
+  For L-shaped rooms, add more wall segments to trace the actual shape.
+
+- "doors": Array of doors. Each has:
+  - "wallIndex": which wall (0-based index into walls array)
+  - "positionAlongWall": 0.0 to 1.0, where on the wall (0 = start, 0.5 = center, 1 = end)
+  - "width": door width in meters (standard: 0.9)
+
+- "windows": Array of windows. Each has:
+  - "wallIndex": which wall (0-based index)
+  - "positionAlongWall": 0.0 to 1.0
+  - "width": window width in meters (standard: 1.2)
+  - "height": window height in meters (standard: 1.2)
+  - "sillHeight": distance from floor to bottom of window (standard: 0.9)
+
+IMPORTANT RULES:
+- Estimate dimensions from the floor plan proportions and any visible scale/dimensions
+- If dimensions are unclear, estimate based on typical room sizes (e.g., bedroom ~12sqm, living room ~20sqm)
+- Walls MUST form a closed polygon (last wall end = first wall start)
+- Place doors and windows on the correct walls based on the floor plan
+- Use meters as the unit
+- Standard door width: 0.9m, standard window width: 1.2m
+- Standard ceiling height: 2.6m
+
+Return JSON:
+{
+  "rooms": [
+    {
+      "name": "Wohnzimmer",
+      "type": "living room",
+      "description": "Rectangular room with two windows on the south wall",
+      "geometry": {
+        "width": 5.0,
+        "depth": 4.0,
+        "height": 2.6,
+        "walls": [...],
+        "doors": [...],
+        "windows": [...]
+      }
+    }
+  ]
+}`,
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:image/jpeg;base64,${imageBase64}`,
+              detail: 'high',
+            },
+          },
+          {
+            type: 'text',
+            text: 'Analyze this floor plan. Identify ALL rooms and extract precise 3D geometry data (wall coordinates, doors, windows) for each room. Return as JSON.',
+          },
+        ],
+      },
+    ],
+    max_tokens: 4000,
+  });
+
+  const content = response.choices[0].message.content || '{}';
+  const parsed = JSON.parse(content) as { rooms?: DetectedRoomWithGeometryRaw[] };
+  const rooms = parsed.rooms || [];
+
+  return rooms.map((room, index) => {
+    const g = room.geometry;
+    const roomId = `room_${index + 1}`;
+
+    // Build walls with height
+    const walls: Wall3D[] = (g.walls || []).map((w) => ({
+      start: w.start,
+      end: w.end,
+      height: g.height || 2.6,
+    }));
+
+    // If no walls provided, create default rectangle
+    if (walls.length === 0) {
+      const w = g.width || 4;
+      const d = g.depth || 3;
+      const h = g.height || 2.6;
+      walls.push(
+        { start: [0, 0], end: [w, 0], height: h },
+        { start: [w, 0], end: [w, d], height: h },
+        { start: [w, d], end: [0, d], height: h },
+        { start: [0, d], end: [0, 0], height: h },
+      );
+    }
+
+    // Build floor polygon from wall vertices
+    const floorPoints: [number, number][] = walls.map((w) => w.start);
+
+    // Convert doors
+    const doors: Door3D[] = (g.doors || []).map((d) => {
+      const wall = walls[d.wallIndex] || walls[0];
+      const wx = wall.start[0] + (wall.end[0] - wall.start[0]) * d.positionAlongWall;
+      const wz = wall.start[1] + (wall.end[1] - wall.start[1]) * d.positionAlongWall;
+      return {
+        position: [wx, wz] as [number, number],
+        width: d.width || 0.9,
+        height: 2.1,
+        wallIndex: d.wallIndex,
+      };
+    });
+
+    // Convert windows
+    const windows: Window3D[] = (g.windows || []).map((w) => {
+      const wall = walls[w.wallIndex] || walls[0];
+      const wx = wall.start[0] + (wall.end[0] - wall.start[0]) * w.positionAlongWall;
+      const wz = wall.start[1] + (wall.end[1] - wall.start[1]) * w.positionAlongWall;
+      return {
+        position: [wx, wz] as [number, number],
+        width: w.width || 1.2,
+        height: w.height || 1.2,
+        wallIndex: w.wallIndex,
+        sillHeight: w.sillHeight || 0.9,
+      };
+    });
+
+    return {
+      id: roomId,
+      name: room.name || `Raum ${index + 1}`,
+      type: mapRoomType(room.type || 'living room'),
+      description: room.description || '',
+      geometry: {
+        roomId,
+        walls,
+        floor: { points: floorPoints },
+        doors,
+        windows,
+        dimensions: {
+          width: g.width || 4,
+          depth: g.depth || 3,
+          height: g.height || 2.6,
+        },
+      },
+    };
+  });
+}
+
+// ── Beautification (3D render → photorealistic) ──
+
+export async function beautifyRenderedImage(
+  renderedImageBase64: string,
+  styleName: string,
+  stylePromptModifier: string,
+  viewType: ViewType,
+  roomTypeName: string
+): Promise<string> {
+  const imageBuffer = Buffer.from(renderedImageBase64, 'base64');
+  const imageFile = new File([imageBuffer], 'render.png', { type: 'image/png' });
+
+  const viewDescriptions: Record<ViewType, string> = {
+    perspective: 'a wide-angle corner perspective at eye level',
+    side: 'a straight-on frontal elevation view',
+    topdown: 'a bird\'s-eye top-down view from above',
+  };
+
+  const prompt = `Transform this 3D room render into a stunning photorealistic interior design photograph.
+
+CRITICAL RULES:
+- Keep ALL furniture in their EXACT positions as shown — do NOT move, add, or remove ANY objects
+- Keep ALL walls, doors, and windows in their EXACT positions
+- Keep the room proportions and camera angle EXACTLY as shown
+- This is ${viewDescriptions[viewType]} of a ${roomTypeName}
+
+STYLE TO APPLY: ${stylePromptModifier}
+
+ENHANCEMENT INSTRUCTIONS:
+- Replace the simple 3D materials with photorealistic textures (real wood grain, fabric weave, stone texture, metal finishes)
+- Add natural lighting from the windows with realistic light rays, soft shadows, and ambient occlusion
+- Add subtle atmospheric effects (warm ambient light, gentle reflections on floors)
+- Make materials look real: matte/glossy surfaces, textile patterns, wood knots
+- Add small lifestyle details: a coffee cup, a book, a plant — but DO NOT move any furniture
+- The final image should look like a professional interior design magazine photograph
+- No watermarks, text, labels, or annotations
+
+Generate this photorealistic version NOW.`;
+
+  const response = await getOpenAI().images.edit({
+    model: 'gpt-image-1.5',
+    image: imageFile,
+    prompt,
+    size: '1536x1024',
+    quality: 'high',
+  });
+
+  return response.data?.[0]?.b64_json || '';
 }
 
 export async function generateRoomVisualization(

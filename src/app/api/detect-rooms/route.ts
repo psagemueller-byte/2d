@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { detectRoomsInFloorPlan } from '@/lib/openai';
+import { detectRoomsWithGeometry } from '@/lib/openai';
 
 export const maxDuration = 60;
 
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     // Strip data URL prefix if present
     const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData;
 
-    const rooms = await detectRoomsInFloorPlan(base64);
+    const rooms = await detectRoomsWithGeometry(base64);
 
     if (!rooms || rooms.length === 0) {
       return NextResponse.json(

@@ -12,9 +12,10 @@ import {
   Crown,
   Fan,
   Sun,
+  type LucideIcon,
 } from 'lucide-react';
 
-const styleIcons: Record<RoomStyleId, React.ElementType> = {
+const styleIcons: Record<RoomStyleId, LucideIcon> = {
   modern: Minus,
   scandinavian: TreePine,
   industrial: Factory,

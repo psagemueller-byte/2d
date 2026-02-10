@@ -22,13 +22,14 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  type LucideIcon,
 } from 'lucide-react';
 import { useCreateStore } from '@/store/useCreateStore';
 import { ROOM_STYLES, PRICE_PER_RENDER } from '@/lib/constants';
 import Button from '@/components/ui/Button';
 import type { RoomStyleId, RoomTypeId } from '@/types';
 
-const styleIcons: Record<RoomStyleId, React.ElementType> = {
+const styleIcons: Record<RoomStyleId, LucideIcon> = {
   modern: Minus,
   scandinavian: TreePine,
   industrial: Factory,
@@ -39,7 +40,7 @@ const styleIcons: Record<RoomStyleId, React.ElementType> = {
   mediterranean: Sun,
 };
 
-const roomTypeIcons: Record<RoomTypeId, React.ElementType> = {
+const roomTypeIcons: Record<RoomTypeId, LucideIcon> = {
   'living-room': Sofa,
   bedroom: Bed,
   kitchen: CookingPot,
