@@ -59,3 +59,24 @@ html {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
+
+/* Animation utilities (tailwindcss-animate replacement for Tailwind v4) */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-in-from-bottom-4 {
+  from { transform: translateY(1rem); }
+  to { transform: translateY(0); }
+}
+@keyframes slide-in-from-top-2 {
+  from { transform: translateY(-0.5rem); }
+  to { transform: translateY(0); }
+}
+
+.animate-in.fade-in.slide-in-from-bottom-4 {
+  animation: fade-in 500ms ease both, slide-in-from-bottom-4 500ms ease both;
+}
+.animate-in.fade-in.slide-in-from-top-2 {
+  animation: fade-in 200ms ease both, slide-in-from-top-2 200ms ease both;
+}

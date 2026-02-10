@@ -146,24 +146,41 @@ export const useCreateStore = create<CreateStore>()(
     }),
     {
       name: 'roomvision-create',
-      storage: createJSONStorage(() =>
-        typeof window !== 'undefined'
-          ? sessionStorage
-          : {
-              getItem: () => null,
-              setItem: () => {},
-              removeItem: () => {},
-            }
-      ),
+      storage: createJSONStorage(() => {
+        if (typeof window === 'undefined') {
+          return { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+        }
+        return {
+          getItem: (name: string) => {
+            try { return sessionStorage.getItem(name); }
+            catch { return null; }
+          },
+          setItem: (name: string, value: string) => {
+            try { sessionStorage.setItem(name, value); }
+            catch { /* QuotaExceededError — ignore silently */ }
+          },
+          removeItem: (name: string) => {
+            try { sessionStorage.removeItem(name); }
+            catch { /* ignore */ }
+          },
+        };
+      }),
       partialize: (state) => ({
-        previewUrl: state.previewUrl,
-        detectedRooms: state.detectedRooms,
+        // Do NOT persist previewUrl (multi-MB data URL) or detectedRooms (large geometry)
+        // These exceed sessionStorage limits. User re-uploads on refresh.
         selectedStyle: state.selectedStyle,
         selectedRoomType: state.selectedRoomType,
         analysisResult: state.analysisResult,
         currentStep: state.currentStep,
         stripeSessionId: state.stripeSessionId,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        // If step >= 2 but no rooms (not persisted), reset to step 1
+        if (state.currentStep >= 2 && state.detectedRooms.length === 0) {
+          state.currentStep = 1;
+        }
+      },
     }
   )
 );

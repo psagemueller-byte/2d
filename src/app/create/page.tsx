@@ -55,7 +55,25 @@ export default function CreatePage() {
         }
 
         const { rooms } = await res.json();
-        setDetectedRooms(rooms);
+
+        // Validate room data before storing in state
+        if (!Array.isArray(rooms) || rooms.length === 0) {
+          throw new Error('Keine gültigen Räume erkannt');
+        }
+
+        const validRoomTypes = ['living-room', 'bedroom', 'kitchen', 'bathroom', 'office'];
+        const validRooms = rooms
+          .filter((r: Record<string, unknown>) => r && typeof r.id === 'string' && typeof r.name === 'string')
+          .map((r: Record<string, unknown>) => ({
+            ...r,
+            type: validRoomTypes.includes(r.type as string) ? r.type : 'living-room',
+          }));
+
+        if (validRooms.length === 0) {
+          throw new Error('Keine gültigen Räume im Ergebnis');
+        }
+
+        setDetectedRooms(validRooms as Parameters<typeof setDetectedRooms>[0]);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Raumerkennung fehlgeschlagen';
         setDetectionError(msg);
