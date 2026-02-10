@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { Upload, FileImage, FileText, X } from 'lucide-react';
 import { useCreateStore } from '@/store/useCreateStore';
+import { compressImageDataUrl } from '@/lib/image-utils';
 
 const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'];
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -49,16 +50,19 @@ export default function FileUpload() {
 
           await page.render({ canvasContext: ctx, viewport, canvas } as Parameters<typeof page.render>[0]).promise;
           const dataUrl = canvas.toDataURL('image/png');
-          setPreviewUrl(dataUrl);
+          // Compress before storing to fit sessionStorage limits
+          const compressed = await compressImageDataUrl(dataUrl).catch(() => dataUrl);
+          setPreviewUrl(compressed);
         } catch {
           setError('Die PDF konnte nicht gelesen werden. Versuche ein anderes Format.');
         }
       } else {
-        // Image file
+        // Image file — compress before storing to fit sessionStorage limits
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
           const result = e.target?.result as string;
-          setPreviewUrl(result);
+          const compressed = await compressImageDataUrl(result).catch(() => result);
+          setPreviewUrl(compressed);
         };
         reader.onerror = () => setError('Die Datei konnte nicht gelesen werden.');
         reader.readAsDataURL(file);

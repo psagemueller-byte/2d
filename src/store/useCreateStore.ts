@@ -166,8 +166,9 @@ export const useCreateStore = create<CreateStore>()(
         };
       }),
       partialize: (state) => ({
-        // Do NOT persist previewUrl (multi-MB data URL) or detectedRooms (large geometry)
-        // These exceed sessionStorage limits. User re-uploads on refresh.
+        previewUrl: state.previewUrl,
+        // Strip geometry from rooms — too large for sessionStorage
+        detectedRooms: state.detectedRooms.map(({ geometry: _g, ...rest }) => rest),
         selectedStyle: state.selectedStyle,
         selectedRoomType: state.selectedRoomType,
         analysisResult: state.analysisResult,
