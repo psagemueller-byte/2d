@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Download, RotateCcw, Eye, Layers, ArrowDown, Home } from 'lucide-react';
+import { Download, RotateCcw, Eye, Layers, ArrowDown, Home, Share2, Check, Loader2 } from 'lucide-react';
 import { useCreateStore } from '@/store/useCreateStore';
+import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
 import Button from '@/components/ui/Button';
 
 const viewIcons: Record<string, React.ElementType> = {
@@ -18,14 +19,27 @@ const viewLabels: Record<string, string> = {
 };
 
 export default function ResultDisplay() {
-  const { roomResults, previewUrl, reset } = useCreateStore();
+  const { roomResults, previewUrl, reset, detectedRooms } = useCreateStore();
   const [activeRoomIdx, setActiveRoomIdx] = useState(0);
   const [activeViewIdx, setActiveViewIdx] = useState(0);
+
+  // Gallery sharing state
+  const [showShareForm, setShowShareForm] = useState(false);
+  const [shareName, setShareName] = useState('');
+  const [shareConsent, setShareConsent] = useState(false);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSuccess, setShareSuccess] = useState(false);
+  const [shareError, setShareError] = useState('');
 
   if (roomResults.length === 0) return null;
 
   const activeRoom = roomResults[activeRoomIdx];
   const activeView = activeRoom?.views?.[activeViewIdx];
+
+  // Get style and room type names for active room
+  const activeDetectedRoom = detectedRooms.find((r) => r.id === activeRoom?.roomId);
+  const styleName = ROOM_STYLES.find((s) => s.id === activeDetectedRoom?.selectedStyle)?.name || '';
+  const roomTypeName = ROOM_TYPES.find((r) => r.id === activeDetectedRoom?.type)?.name || activeRoom?.roomName || '';
 
   const handleDownload = (imageUrl: string, label: string) => {
     const link = document.createElement('a');
@@ -45,6 +59,37 @@ export default function ResultDisplay() {
         }, delay);
         delay += 500;
       }
+    }
+  };
+
+  const handleShareSubmit = async () => {
+    if (!shareConsent || !activeView) return;
+    setShareLoading(true);
+    setShareError('');
+
+    try {
+      const res = await fetch('/api/gallery/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageData: activeView.imageUrl,
+          userName: shareName.trim() || 'Anonym',
+          roomStyle: styleName,
+          roomType: roomTypeName,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Upload fehlgeschlagen');
+      }
+
+      setShareSuccess(true);
+      setShowShareForm(false);
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : 'Upload fehlgeschlagen');
+    } finally {
+      setShareLoading(false);
     }
   };
 
@@ -193,6 +238,100 @@ export default function ResultDisplay() {
           <RotateCcw className="h-4 w-4" />
           Neues Design
         </Button>
+      </div>
+
+      {/* Gallery Share Section */}
+      <div className="rounded-xl border border-border bg-surface/50 p-6">
+        {shareSuccess ? (
+          <div className="flex items-center gap-3 text-brand">
+            <Check className="h-5 w-5" />
+            <div>
+              <p className="font-medium">Vielen Dank!</p>
+              <p className="text-sm text-muted">
+                Dein Bild wird nach Freigabe in der Galerie auf unserer Startseite angezeigt.
+              </p>
+            </div>
+          </div>
+        ) : showShareForm ? (
+          <div className="space-y-4">
+            <div>
+              <p className="font-medium">Bild zur Galerie hinzufügen</p>
+              <p className="mt-1 text-sm text-muted">
+                Zeige dein Design anderen Nutzern auf unserer Startseite.
+              </p>
+            </div>
+
+            <input
+              type="text"
+              placeholder="Dein Name (optional)"
+              value={shareName}
+              onChange={(e) => setShareName(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm placeholder:text-muted focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+              maxLength={50}
+            />
+
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={shareConsent}
+                onChange={(e) => setShareConsent(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border accent-brand"
+              />
+              <span className="text-sm text-muted">
+                Ich stimme zu, dass mein generiertes Bild in der öffentlichen Galerie auf der
+                Startseite angezeigt wird.
+              </span>
+            </label>
+
+            {shareError && (
+              <p className="text-sm text-red-400">{shareError}</p>
+            )}
+
+            <div className="flex gap-3">
+              <Button
+                size="md"
+                disabled={!shareConsent || shareLoading}
+                onClick={handleShareSubmit}
+              >
+                {shareLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Wird hochgeladen...
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="h-4 w-4" />
+                    Absenden
+                  </>
+                )}
+              </Button>
+              <Button
+                size="md"
+                variant="ghost"
+                onClick={() => setShowShareForm(false)}
+              >
+                Abbrechen
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">Gefällt dir dein Design?</p>
+              <p className="text-sm text-muted">
+                Teile es in unserer Galerie und inspiriere andere Nutzer.
+              </p>
+            </div>
+            <Button
+              size="md"
+              variant="secondary"
+              onClick={() => setShowShareForm(true)}
+            >
+              <Share2 className="h-4 w-4" />
+              Zur Galerie
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
