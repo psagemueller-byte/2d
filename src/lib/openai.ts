@@ -189,7 +189,7 @@ export async function generateRoomVisualization(
   const imageFile = new File([imageBuffer], 'floorplan.png', { type: 'image/png' });
 
   const response = await getOpenAI().images.edit({
-    model: 'gpt-image-1',
+    model: 'gpt-image-1.5',
     image: imageFile,
     prompt,
     size: '1536x1024',
