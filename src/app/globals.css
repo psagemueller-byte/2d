@@ -80,3 +80,21 @@ html {
 .animate-in.fade-in.slide-in-from-top-2 {
   animation: fade-in 200ms ease both, slide-in-from-top-2 200ms ease both;
 }
+
+/* Shimmer effect for skeleton loaders */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(99, 102, 241, 0.06) 40%,
+    rgba(99, 102, 241, 0.12) 50%,
+    rgba(99, 102, 241, 0.06) 60%,
+    transparent 100%
+  );
+  animation: shimmer 2s ease-in-out infinite;
+}

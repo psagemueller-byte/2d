@@ -7,6 +7,7 @@ import StepIndicator from '@/components/create/StepIndicator';
 import FileUpload from '@/components/create/FileUpload';
 import RoomDetection from '@/components/create/RoomDetection';
 import ResultDisplay from '@/components/create/ResultDisplay';
+import LoadingExperience from '@/components/ui/LoadingExperience';
 
 export default function CreatePage() {
   const {
@@ -118,12 +119,12 @@ export default function CreatePage() {
 
         {/* Room Detection Loading */}
         {isDetecting && (
-          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col items-center gap-4 py-12">
-              <div className="h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent" />
-              <p className="font-medium">Räume werden erkannt...</p>
-              <p className="text-xs text-muted">GPT-4o analysiert deinen Grundriss</p>
-            </div>
+          <section>
+            <LoadingExperience
+              progress={15}
+              phase="detecting"
+              compact
+            />
           </section>
         )}
 
@@ -160,11 +161,15 @@ export default function CreatePage() {
           generationStatus === 'generating_view1' ||
           generationStatus === 'generating_view2' ||
           generationStatus === 'generating_view3') && (
-          <div className="flex flex-col items-center gap-4 py-12">
-            <div className="h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent" />
-            <p className="text-muted">Designs werden generiert...</p>
-            <p className="text-xs text-muted">3 Ansichten pro Raum — das dauert etwas</p>
-          </div>
+          <LoadingExperience
+            progress={
+              generationStatus === 'analyzing' ? 10
+              : generationStatus === 'generating_view1' ? 35
+              : generationStatus === 'generating_view2' ? 60
+              : 85
+            }
+            phase={generationStatus === 'analyzing' ? 'analyzing' : 'generating'}
+          />
         )}
       </div>
     </div>

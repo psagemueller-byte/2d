@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import { useCreateStore } from '@/store/useCreateStore';
 import { compressImageDataUrl } from '@/lib/image-utils';
 import ResultDisplay from '@/components/create/ResultDisplay';
+import LoadingExperience from '@/components/ui/LoadingExperience';
+import type { LoadingPhase } from '@/components/ui/LoadingExperience';
 import { getFurnitureForRoom } from '@/lib/furniture-registry';
 import { placeFurniture } from '@/lib/furniture-placer';
 import type { RoomResult, GeneratedView, ViewType } from '@/types';
@@ -370,41 +372,28 @@ function SuccessContent() {
       </div>
 
       <div className="mt-12">
-        {/* Progress bar + Status */}
+        {/* Progress + Status */}
         {isGenerating && (
-          <div className="mx-auto max-w-md space-y-4 py-8">
-            <div className="h-2 overflow-hidden rounded-full bg-surface">
-              <div
-                className="h-full rounded-full bg-brand transition-all duration-1000 ease-out"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-
-            <div className="flex flex-col items-center gap-2">
-              <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
-              <p className="text-base font-medium">
-                {is3DRendering
-                  ? `3D-Szene wird aufgebaut... (${renderedViews.length}/${selectedRooms.length * 3} Ansichten)`
+          <div>
+            <LoadingExperience
+              progress={progressPercent}
+              phase={
+                is3DRendering
+                  ? 'rendering_3d'
                   : generationStatus === 'beautifying'
-                  ? currentRoom
-                    ? `Beautification: ${currentRoom.name} ${viewNames[currentViewIdx] || ''} (${currentRoomIdx + 1}/${selectedRooms.length})`
-                    : 'Bilder werden fotorealistisch aufbereitet...'
+                  ? 'beautifying'
                   : serverStatus === 'analyzing'
-                  ? 'Grundriss wird analysiert...'
-                  : currentRoom
-                  ? `${currentRoom.name}: ${viewNames[currentViewIdx] || 'Generierung'} (${currentRoomIdx + 1}/${selectedRooms.length})`
-                  : 'Wird generiert...'}
-              </p>
-              {!is3DRendering && (
-                <p className="text-xs text-muted">
-                  {completedViews}/{totalViews} Ansichten fertig
-                </p>
-              )}
-            </div>
+                  ? 'analyzing'
+                  : 'generating' as LoadingPhase
+              }
+              currentItem={currentRoom?.name}
+              completedCount={completedViews}
+              totalCount={totalViews}
+            />
 
             {/* Show already generated room results */}
             {roomResults.length > 0 && (
-              <div className="mt-8 space-y-6">
+              <div className="mx-auto max-w-lg mt-4 space-y-6">
                 <p className="text-sm font-medium text-center text-muted">Bereits fertig:</p>
                 {roomResults.map((roomResult) => (
                   <div key={roomResult.roomId} className="space-y-2">
