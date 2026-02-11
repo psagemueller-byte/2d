@@ -1,7 +1,5 @@
 'use client';
 
-import { Suspense } from 'react';
-import { useGLTF } from '@react-three/drei';
 import type { PlacedFurniture } from '@/types/scene3d';
 
 interface FurnitureLoaderProps {
@@ -9,27 +7,9 @@ interface FurnitureLoaderProps {
 }
 
 /**
- * Loads and places GLTF furniture models in the scene.
- * Each piece is positioned and rotated according to the placement algorithm.
- */
-function FurnitureModel({ placed }: { placed: PlacedFurniture }) {
-  const { scene } = useGLTF(placed.item.modelPath);
-
-  return (
-    <primitive
-      object={scene.clone()}
-      position={placed.position}
-      rotation={[0, placed.rotation, 0]}
-      scale={placed.item.scale}
-      castShadow
-      receiveShadow
-    />
-  );
-}
-
-/**
- * Fallback box placeholder when GLTF model is not available.
- * Uses the furniture footprint dimensions to show where the item would be.
+ * Renders furniture as colored placeholder boxes.
+ * Uses the furniture footprint dimensions and category-based heights/colors.
+ * When real .glb models are added, re-enable GLTF loading with an error boundary.
  */
 function FurniturePlaceholder({ placed }: { placed: PlacedFurniture }) {
   const [w, d] = placed.item.footprint;
@@ -77,25 +57,9 @@ export default function FurnitureLoader({ furniture }: FurnitureLoaderProps) {
 
   return (
     <group>
-      {furniture.map((placed, i) => {
-        // Check if the model file actually exists (starts with /assets/)
-        const hasModel = placed.item.modelPath.startsWith('/assets/') &&
-          placed.item.modelPath.endsWith('.glb');
-
-        if (hasModel) {
-          return (
-            <Suspense
-              key={`furniture-${i}`}
-              fallback={<FurniturePlaceholder placed={placed} />}
-            >
-              <FurnitureModel placed={placed} />
-            </Suspense>
-          );
-        }
-
-        // Use placeholder if no model available
-        return <FurniturePlaceholder key={`furniture-${i}`} placed={placed} />;
-      })}
+      {furniture.map((placed, i) => (
+        <FurniturePlaceholder key={`furniture-${i}`} placed={placed} />
+      ))}
     </group>
   );
 }
