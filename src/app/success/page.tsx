@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useCreateStore } from '@/store/useCreateStore';
 import { compressImageDataUrl } from '@/lib/image-utils';
@@ -59,7 +59,10 @@ function SuccessContent() {
     setCurrentStep,
   } = useCreateStore();
 
-  const selectedRooms = detectedRooms.filter((r) => r.selected && r.selectedStyle);
+  const selectedRooms = useMemo(
+    () => detectedRooms.filter((r) => r.selected && r.selectedStyle),
+    [detectedRooms]
+  );
 
   const [totalViews, setTotalViews] = useState(0);
   const [completedViews, setCompletedViews] = useState(0);
@@ -243,10 +246,13 @@ function SuccessContent() {
   }, [sessionId, previewUrl, selectedRooms, has3DGeometry, setStripeSessionId, setCurrentStep, setGenerationStatus, setError, poll]);
 
   // ── After 3D renders are complete, send to server for beautification ──
+  const hasSentBeautification = useRef(false);
   useEffect(() => {
     if (!allRoomsRendered || !sessionId) return;
     if (renderedViews.length === 0) return;
+    if (hasSentBeautification.current) return;
 
+    hasSentBeautification.current = true;
     setGenerationStatus('beautifying');
 
     const sendForBeautification = async () => {
