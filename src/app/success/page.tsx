@@ -218,8 +218,12 @@ function SuccessContent() {
           });
 
           if (!res.ok) {
+            const contentType = res.headers.get('content-type') || '';
+            if (res.status === 504 || res.status === 502 || !contentType.includes('application/json')) {
+              throw new Error('Der Server hat zu lange gebraucht. Bitte versuche es erneut.');
+            }
             const data = await res.json().catch(() => ({}));
-            throw new Error(data.error || 'Generierung konnte nicht gestartet werden');
+            throw new Error((data as Record<string, string>).error || 'Generierung konnte nicht gestartet werden');
           }
 
           pollRef.current = setInterval(poll, POLL_INTERVAL);
@@ -268,8 +272,12 @@ function SuccessContent() {
         });
 
         if (!res.ok) {
+          const contentType = res.headers.get('content-type') || '';
+          if (res.status === 504 || res.status === 502 || !contentType.includes('application/json')) {
+            throw new Error('Der Server hat zu lange gebraucht. Bitte versuche es erneut.');
+          }
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Beautification konnte nicht gestartet werden');
+          throw new Error((data as Record<string, string>).error || 'Beautification konnte nicht gestartet werden');
         }
 
         // Start polling for beautification results

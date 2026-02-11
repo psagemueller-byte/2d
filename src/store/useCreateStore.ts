@@ -167,21 +167,15 @@ export const useCreateStore = create<CreateStore>()(
       }),
       partialize: (state) => ({
         previewUrl: state.previewUrl,
-        // Strip geometry from rooms — too large for sessionStorage
-        detectedRooms: state.detectedRooms.map(({ geometry: _g, ...rest }) => rest),
+        // Geometry from buildDefaultGeometry is small (4 walls + few doors/windows)
+        // and must survive the redirect to /success for the 3D pipeline
+        detectedRooms: state.detectedRooms,
         selectedStyle: state.selectedStyle,
         selectedRoomType: state.selectedRoomType,
         analysisResult: state.analysisResult,
         currentStep: state.currentStep,
         stripeSessionId: state.stripeSessionId,
       }),
-      onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        // If step >= 2 but no rooms (not persisted), reset to step 1
-        if (state.currentStep >= 2 && state.detectedRooms.length === 0) {
-          state.currentStep = 1;
-        }
-      },
     }
   )
 );

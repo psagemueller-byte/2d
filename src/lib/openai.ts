@@ -45,17 +45,17 @@ Answer in English. Be structured and use bullet points.`,
             type: 'image_url',
             image_url: {
               url: `data:image/jpeg;base64,${imageBase64}`,
-              detail: 'high',
+              detail: 'low',
             },
           },
           {
             type: 'text',
-            text: 'Analyze this floor plan with extreme precision. Extract every structural detail and create an exact furniture placement plan.',
+            text: 'Analyze this floor plan. Extract structural details and create a furniture placement plan.',
           },
         ],
       },
     ],
-    max_tokens: 1500,
+    max_tokens: 1000,
   });
 
   return response.choices[0].message.content || '';
