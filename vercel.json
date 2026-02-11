@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "src/app/api/generate-view/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/generate-all/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/generation-status/route.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/detect-rooms/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}

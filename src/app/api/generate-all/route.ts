@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
-import { createJob, getJob, updateJob, addResult } from '@/lib/generation-store';
-import { analyzeFloorPlan, generateRoomVisualization, buildMultiViewPrompt, beautifyRenderedImage } from '@/lib/openai';
+import { createJob, getJob, updateJob } from '@/lib/generation-store';
+import { analyzeFloorPlan } from '@/lib/openai';
 import type { GenerationTask } from '@/lib/generation-store';
 import type { ViewType } from '@/types';
 
@@ -15,6 +15,16 @@ const VIEWS: { type: ViewType; label: string }[] = [
   { type: 'topdown', label: 'Draufsicht' },
 ];
 
+/**
+ * POST /api/generate-all
+ *
+ * Creates a generation job and queues tasks.
+ * Does NOT generate any images — the client drives generation
+ * by calling /api/generate-view for each view (Edge Runtime, no 10s limit).
+ *
+ * For legacy pipeline: runs analyzeFloorPlan (fast, ~3-5s with detail:'low').
+ * For 3D pipeline: just queues beautification tasks.
+ */
 export async function POST(request: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -39,6 +49,14 @@ export async function POST(request: NextRequest) {
         status: existingJob.status,
         totalViews: existingJob.tasks.length,
         completedViews: existingJob.results.length,
+        tasks: existingJob.tasks.map((t, i) => ({
+          index: i,
+          roomId: t.roomId,
+          roomName: t.roomName,
+          viewType: t.viewType,
+          viewLabel: t.viewLabel,
+          completed: i < existingJob.results.length,
+        })),
       });
     }
 
@@ -78,54 +96,10 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Create job (no floor plan image needed — we have renders)
+      // Create job — no image generation here
       createJob(sessionId, '', tasks);
-      updateJob(sessionId, { status: 'generating', isProcessing: true });
+      updateJob(sessionId, { status: 'generating' });
 
-      // Beautify first view immediately
-      try {
-        const firstTask = tasks[0];
-        if (firstTask && firstTask.renderedImageData) {
-          const styleData = ROOM_STYLES.find((s) => s.id === firstTask.style);
-          const roomData = ROOM_TYPES.find((r) => r.id === firstTask.roomType);
-
-          if (styleData && roomData) {
-            // Strip data URL prefix if present
-            const renderBase64 = firstTask.renderedImageData.includes(',')
-              ? firstTask.renderedImageData.split(',')[1]
-              : firstTask.renderedImageData;
-
-            const resultBase64 = await beautifyRenderedImage(
-              renderBase64,
-              styleData.name,
-              styleData.promptModifier,
-              firstTask.viewType as ViewType,
-              roomData.name
-            );
-
-            if (resultBase64) {
-              addResult(sessionId, {
-                roomId: firstTask.roomId,
-                roomName: firstTask.roomName,
-                viewType: firstTask.viewType,
-                viewLabel: firstTask.viewLabel,
-                imageData: `data:image/png;base64,${resultBase64}`,
-              });
-            }
-          }
-        }
-
-        const job = getJob(sessionId);
-        if (job && job.results.length >= job.tasks.length) {
-          updateJob(sessionId, { status: 'completed', isProcessing: false });
-        } else {
-          updateJob(sessionId, { isProcessing: false });
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Beautification fehlgeschlagen';
-        console.error('Beautify error:', msg);
-        updateJob(sessionId, { error: msg, status: 'failed', isProcessing: false });
-      }
     } else {
       // ═══════════════════════════════════════════
       // LEGACY PIPELINE: Generate from floor plan
@@ -153,67 +127,32 @@ export async function POST(request: NextRequest) {
 
       const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData;
       createJob(sessionId, base64, tasks);
-      updateJob(sessionId, { status: 'analyzing', isProcessing: true });
+      updateJob(sessionId, { status: 'analyzing' });
 
+      // Step 1: Analyze floor plan (fast, ~3-5s with detail:'low')
+      let analysis = '';
       try {
-        // Step 1: Analyze floor plan
-        let analysis = '';
-        try {
-          analysis = await analyzeFloorPlan(base64);
-        } catch (err) {
-          console.warn('Analysis failed, continuing without:', err);
-        }
-        updateJob(sessionId, { analysis, status: 'generating' });
-
-        // Step 2: Generate first view
-        const firstTask = tasks[0];
-        if (firstTask) {
-          const styleData = ROOM_STYLES.find((s) => s.id === firstTask.style);
-          const roomData = ROOM_TYPES.find((r) => r.id === firstTask.roomType);
-
-          if (styleData && roomData) {
-            const prompt = buildMultiViewPrompt(
-              firstTask.viewType as ViewType,
-              styleData.name,
-              styleData.promptModifier,
-              roomData.name,
-              analysis,
-              firstTask.roomName,
-              firstTask.roomDescription
-            );
-
-            const resultBase64 = await generateRoomVisualization(base64, prompt);
-
-            if (resultBase64) {
-              addResult(sessionId, {
-                roomId: firstTask.roomId,
-                roomName: firstTask.roomName,
-                viewType: firstTask.viewType,
-                viewLabel: firstTask.viewLabel,
-                imageData: `data:image/png;base64,${resultBase64}`,
-              });
-            }
-          }
-        }
-
-        const job = getJob(sessionId);
-        if (job && job.results.length >= job.tasks.length) {
-          updateJob(sessionId, { status: 'completed', isProcessing: false });
-        } else {
-          updateJob(sessionId, { isProcessing: false });
-        }
+        analysis = await analyzeFloorPlan(base64);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Generierung fehlgeschlagen';
-        console.error('Generate-all error:', msg);
-        updateJob(sessionId, { error: msg, status: 'failed', isProcessing: false });
+        console.warn('Analysis failed, continuing without:', err);
       }
+      updateJob(sessionId, { analysis, status: 'generating' });
     }
 
+    // Return job info with task list for client to drive generation
     const job = getJob(sessionId)!;
     return NextResponse.json({
       status: job.status,
       totalViews: job.tasks.length,
       completedViews: job.results.length,
+      tasks: job.tasks.map((t, i) => ({
+        index: i,
+        roomId: t.roomId,
+        roomName: t.roomName,
+        viewType: t.viewType,
+        viewLabel: t.viewLabel,
+        completed: false,
+      })),
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unbekannter Fehler';
