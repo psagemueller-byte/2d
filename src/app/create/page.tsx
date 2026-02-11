@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useCreateStore } from '@/store/useCreateStore';
-import { compressImageDataUrl } from '@/lib/image-utils';
+import { compressImageForDetection } from '@/lib/image-utils';
 import StepIndicator from '@/components/create/StepIndicator';
 import FileUpload from '@/components/create/FileUpload';
 import RoomDetection from '@/components/create/RoomDetection';
@@ -36,23 +36,36 @@ export default function CreatePage() {
       setDetectionError(null);
 
       try {
-        // Compress image before sending
+        // Compress image aggressively for fast detection
         let compressedImage: string;
         try {
-          compressedImage = await compressImageDataUrl(previewUrl);
+          compressedImage = await compressImageForDetection(previewUrl);
         } catch {
           compressedImage = previewUrl;
         }
 
-        const res = await fetch('/api/detect-rooms', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageData: compressedImage }),
-        });
+        const body = JSON.stringify({ imageData: compressedImage });
 
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Raumerkennung fehlgeschlagen');
+        // Try up to 2 attempts (retry once on timeout)
+        let res: Response | null = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          res = await fetch('/api/detect-rooms', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+          });
+          // Retry on 504 (Vercel timeout) or 502 (cold start)
+          if ((res.status === 504 || res.status === 502) && attempt === 0) continue;
+          break;
+        }
+
+        if (!res || !res.ok) {
+          const contentType = res?.headers.get('content-type') || '';
+          if (res && (res.status === 504 || res.status === 502 || !contentType.includes('application/json'))) {
+            throw new Error('Die Raumerkennung hat zu lange gedauert. Bitte versuche es erneut.');
+          }
+          const data = res ? await res.json().catch(() => ({})) : {};
+          throw new Error((data as Record<string, string>).error || 'Raumerkennung fehlgeschlagen');
         }
 
         const { rooms } = await res.json();
@@ -130,8 +143,17 @@ export default function CreatePage() {
 
         {/* Room Detection Error */}
         {detectionError && (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
-            {detectionError}
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4">
+            <p className="text-sm text-red-400">{detectionError}</p>
+            <button
+              onClick={() => {
+                hasDetected.current = false;
+                setDetectionError(null);
+              }}
+              className="mt-2 text-sm font-medium text-[var(--brand)] hover:underline"
+            >
+              Erneut versuchen
+            </button>
           </div>
         )}
 

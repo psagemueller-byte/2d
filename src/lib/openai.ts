@@ -118,6 +118,150 @@ function mapRoomType(rawType: string): RoomTypeId {
   return 'living-room'; // Default fallback
 }
 
+// ── Fast Room Detection (fits Vercel Hobby 10s timeout) ──
+
+interface FastRoomRaw {
+  name: string;
+  type: string;
+  description: string;
+  estimatedWidth: number;
+  estimatedDepth: number;
+  doorCount: number;
+  windowCount: number;
+  doorWalls: string[];
+  windowWalls: string[];
+}
+
+/**
+ * Fast room detection using detail:'low' to fit within Vercel Hobby 10s timeout.
+ * Returns rooms with basic dimensions + door/window info for client-side geometry.
+ */
+export async function detectRoomsFast(
+  imageBase64: string
+): Promise<{ id: string; name: string; type: RoomTypeId; description: string; geometry: Room3DData }[]> {
+  const response = await getOpenAI().chat.completions.create({
+    model: 'gpt-4o',
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert architect analyzing floor plans. Identify ALL rooms and estimate their dimensions.
+
+For EACH room provide:
+- "name": German room name (e.g., "Wohnzimmer", "Küche", "Schlafzimmer", "Bad", "Balkon")
+- "type": English type (one of: "living room", "bedroom", "kitchen", "bathroom", "office", "dining room", "hallway", "storage", "laundry", "balcony")
+- "description": Brief English description
+- "estimatedWidth": width in meters (x-axis)
+- "estimatedDepth": depth in meters (z-axis)
+- "doorCount": number of doors
+- "windowCount": number of windows
+- "doorWalls": which walls have doors (array of "south", "east", "north", "west")
+- "windowWalls": which walls have windows (array of "south", "east", "north", "west")
+
+Use compass: north=top, south=bottom, west=left, east=right.
+If dimensions are labeled, use them. Otherwise estimate from typical room sizes.
+
+Return JSON: { "rooms": [ { "name": "...", "type": "...", ... } ] }`,
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:image/jpeg;base64,${imageBase64}`,
+              detail: 'low',
+            },
+          },
+          {
+            type: 'text',
+            text: 'Identify ALL rooms in this floor plan with estimated dimensions. Return as JSON.',
+          },
+        ],
+      },
+    ],
+    max_tokens: 1500,
+  });
+
+  const content = response.choices[0].message.content || '{}';
+  const parsed = JSON.parse(content) as { rooms?: FastRoomRaw[] };
+  const rooms = parsed.rooms || [];
+
+  return rooms.map((room, index) => {
+    const roomId = `room_${index + 1}`;
+    const width = room.estimatedWidth || 4;
+    const depth = room.estimatedDepth || 3;
+    return {
+      id: roomId,
+      name: room.name || `Raum ${index + 1}`,
+      type: mapRoomType(room.type || 'living room'),
+      description: room.description || '',
+      geometry: buildDefaultGeometry(
+        roomId, width, depth,
+        room.doorCount || 1,
+        room.windowCount || 1,
+        room.doorWalls || ['south'],
+        room.windowWalls || ['north'],
+      ),
+    };
+  });
+}
+
+const WALL_INDEX_MAP: Record<string, number> = { south: 0, east: 1, north: 2, west: 3 };
+
+/**
+ * Build rectangular Room3DData from basic dimensions and compass-direction door/window info.
+ */
+function buildDefaultGeometry(
+  roomId: string,
+  width: number,
+  depth: number,
+  doorCount: number,
+  windowCount: number,
+  doorWalls: string[],
+  windowWalls: string[],
+): Room3DData {
+  const h = 2.6;
+  // 4 walls: south(0), east(1), north(2), west(3)
+  const walls: Wall3D[] = [
+    { start: [0, 0], end: [width, 0], height: h },
+    { start: [width, 0], end: [width, depth], height: h },
+    { start: [width, depth], end: [0, depth], height: h },
+    { start: [0, depth], end: [0, 0], height: h },
+  ];
+
+  const floorPoints: [number, number][] = walls.map((w) => w.start);
+
+  // Place doors
+  const doors: Door3D[] = [];
+  for (let i = 0; i < doorCount; i++) {
+    const wallName = doorWalls[i % doorWalls.length] || 'south';
+    const wallIdx = WALL_INDEX_MAP[wallName.toLowerCase()] ?? 0;
+    const wall = walls[wallIdx];
+    // Spread multiple doors on same wall evenly
+    const doorsOnThisWall = doorWalls.filter((w) => w.toLowerCase() === wallName.toLowerCase()).length;
+    const pos = doorsOnThisWall > 1 ? (i + 1) / (doorsOnThisWall + 1) : 0.5;
+    const wx = wall.start[0] + (wall.end[0] - wall.start[0]) * pos;
+    const wz = wall.start[1] + (wall.end[1] - wall.start[1]) * pos;
+    doors.push({ position: [wx, wz], width: 0.9, height: 2.1, wallIndex: wallIdx });
+  }
+
+  // Place windows
+  const windows: Window3D[] = [];
+  for (let i = 0; i < windowCount; i++) {
+    const wallName = windowWalls[i % windowWalls.length] || 'north';
+    const wallIdx = WALL_INDEX_MAP[wallName.toLowerCase()] ?? 2;
+    const wall = walls[wallIdx];
+    const windowsOnThisWall = windowWalls.filter((w) => w.toLowerCase() === wallName.toLowerCase()).length;
+    const pos = windowsOnThisWall > 1 ? (i + 1) / (windowsOnThisWall + 1) : 0.5;
+    const wx = wall.start[0] + (wall.end[0] - wall.start[0]) * pos;
+    const wz = wall.start[1] + (wall.end[1] - wall.start[1]) * pos;
+    windows.push({ position: [wx, wz], width: 1.2, height: 1.2, wallIndex: wallIdx, sillHeight: 0.9 });
+  }
+
+  return { roomId, walls, floor: { points: floorPoints }, doors, windows, dimensions: { width, depth, height: h } };
+}
+
 export async function detectRoomsInFloorPlan(
   imageBase64: string
 ): Promise<{ id: string; name: string; type: RoomTypeId; description: string }[]> {
