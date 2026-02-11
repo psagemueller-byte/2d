@@ -75,8 +75,9 @@ function SuccessContent() {
   const [allRoomsRendered, setAllRoomsRendered] = useState(false);
   const [currentRoomForRender, setCurrentRoomForRender] = useState(0);
 
-  // Check if any room has 3D geometry (use 3D pipeline)
-  const has3DGeometry = selectedRooms.some((r) => r.geometry);
+  // 3D pipeline disabled — WebGL context crashes on many devices/browsers.
+  // Using legacy server pipeline instead (sends floor plan to OpenAI directly).
+  const has3DGeometry = false;
 
   // Build room results from poll results
   const processResults = useCallback(
