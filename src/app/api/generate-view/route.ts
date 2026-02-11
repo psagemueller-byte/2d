@@ -1,24 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getJob, addResult, updateJob } from '@/lib/generation-store';
-import { generateRoomVisualization, buildMultiViewPrompt, beautifyRenderedImage } from '@/lib/openai';
+import { generateRoomVisualization, buildMultiViewPrompt } from '@/lib/openai';
 import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
 import type { ViewType } from '@/types';
 
-// Use Node.js runtime but with maxDuration = 300 (Fluid Compute).
-// Vercel Hobby supports up to 300s with Fluid Compute enabled.
-// Fallback: even without Fluid Compute, Node.js runtime will try maxDuration.
+// Fluid Compute: 300s on all Vercel plans including Hobby.
 export const maxDuration = 300;
 
 /**
  * POST /api/generate-view
  *
- * Generates a SINGLE view for a generation job.
- * Called by the client for each view sequentially.
- * This endpoint takes 20-60s (OpenAI gpt-image-1.5), so it needs
- * a longer timeout than the default 10s on Vercel Hobby.
+ * Generates a SINGLE room visualization view.
+ * Fully self-contained — all needed data comes in the request body.
+ * No dependency on in-memory store (avoids Vercel multi-instance problem).
  *
- * With Fluid Compute (available on all Vercel plans), this can run
- * for up to 300 seconds.
+ * Request body:
+ *   imageBase64: string   — floor plan image (base64, no data URL prefix)
+ *   analysis: string      — floor plan analysis text from generate-all
+ *   roomName: string      — name of the room to generate
+ *   roomDescription: string — description of the room
+ *   roomType: string      — room type ID (e.g., "living-room")
+ *   style: string         — style ID (e.g., "modern")
+ *   viewType: string      — "perspective" | "side" | "topdown"
+ *
+ * Returns:
+ *   viewGenerated: { roomId, roomName, viewType, viewLabel, imageData }
  */
 export async function POST(request: NextRequest) {
   try {
@@ -27,93 +32,51 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { sessionId, taskIndex } = body;
+    const {
+      imageBase64,
+      analysis,
+      roomId,
+      roomName,
+      roomDescription,
+      roomType,
+      style,
+      viewType,
+      viewLabel,
+    } = body;
 
-    if (!sessionId || taskIndex === undefined || taskIndex === null) {
-      return NextResponse.json({ error: 'sessionId und taskIndex erforderlich' }, { status: 400 });
+    if (!imageBase64 || !roomType || !style || !viewType) {
+      return NextResponse.json(
+        { error: 'Fehlende Pflichtfelder (imageBase64, roomType, style, viewType)' },
+        { status: 400 }
+      );
     }
 
-    const job = getJob(sessionId);
-    if (!job) {
-      return NextResponse.json({ error: 'Job nicht gefunden' }, { status: 404 });
-    }
-
-    const task = job.tasks[taskIndex];
-    if (!task) {
-      return NextResponse.json({ error: `Task ${taskIndex} nicht gefunden` }, { status: 404 });
-    }
-
-    // Check if this task was already completed
-    if (taskIndex < job.results.length) {
-      return NextResponse.json({
-        status: 'already_completed',
-        completedViews: job.results.length,
-        totalViews: job.tasks.length,
-      });
-    }
-
-    const styleData = ROOM_STYLES.find((s) => s.id === task.style);
-    const roomData = ROOM_TYPES.find((r) => r.id === task.roomType);
+    const styleData = ROOM_STYLES.find((s) => s.id === style);
+    const roomData = ROOM_TYPES.find((r) => r.id === roomType);
 
     if (!styleData || !roomData) {
       return NextResponse.json({ error: 'Stil oder Raumtyp nicht gefunden' }, { status: 400 });
     }
 
-    let resultBase64 = '';
+    // Build prompt and generate
+    const prompt = buildMultiViewPrompt(
+      viewType as ViewType,
+      styleData.name,
+      styleData.promptModifier,
+      roomData.name,
+      analysis || '',
+      roomName || '',
+      roomDescription || ''
+    );
 
-    if (task.taskType === 'beautify' && task.renderedImageData) {
-      // ── 3D Pipeline: Beautify the pre-rendered 3D image ──
-      const renderBase64 = task.renderedImageData.includes(',')
-        ? task.renderedImageData.split(',')[1]
-        : task.renderedImageData;
-
-      resultBase64 = await beautifyRenderedImage(
-        renderBase64,
-        styleData.name,
-        styleData.promptModifier,
-        task.viewType as ViewType,
-        roomData.name
-      );
-    } else {
-      // ── Legacy Pipeline: Generate from floor plan ──
-      const prompt = buildMultiViewPrompt(
-        task.viewType as ViewType,
-        styleData.name,
-        styleData.promptModifier,
-        roomData.name,
-        job.analysis,
-        task.roomName,
-        task.roomDescription
-      );
-
-      resultBase64 = await generateRoomVisualization(job.imageData, prompt);
-    }
-
-    if (resultBase64) {
-      addResult(sessionId, {
-        roomId: task.roomId,
-        roomName: task.roomName,
-        viewType: task.viewType,
-        viewLabel: task.viewLabel,
-        imageData: `data:image/png;base64,${resultBase64}`,
-      });
-    }
-
-    // Check if all tasks are done
-    const updatedJob = getJob(sessionId);
-    if (updatedJob && updatedJob.results.length >= updatedJob.tasks.length) {
-      updateJob(sessionId, { status: 'completed' });
-    }
+    const resultBase64 = await generateRoomVisualization(imageBase64, prompt);
 
     return NextResponse.json({
-      status: updatedJob?.status || 'generating',
-      completedViews: updatedJob?.results.length || 0,
-      totalViews: updatedJob?.tasks.length || 0,
       viewGenerated: {
-        roomId: task.roomId,
-        roomName: task.roomName,
-        viewType: task.viewType,
-        viewLabel: task.viewLabel,
+        roomId: roomId || '',
+        roomName: roomName || '',
+        viewType,
+        viewLabel: viewLabel || viewType,
         imageData: resultBase64 ? `data:image/png;base64,${resultBase64}` : null,
       },
     });

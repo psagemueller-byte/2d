@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ROOM_STYLES, ROOM_TYPES } from '@/lib/constants';
-import { createJob, getJob, updateJob } from '@/lib/generation-store';
 import { analyzeFloorPlan } from '@/lib/openai';
-import type { GenerationTask } from '@/lib/generation-store';
 import type { ViewType } from '@/types';
 
 export const maxDuration = 60;
@@ -18,12 +16,12 @@ const VIEWS: { type: ViewType; label: string }[] = [
 /**
  * POST /api/generate-all
  *
- * Creates a generation job and queues tasks.
- * Does NOT generate any images — the client drives generation
- * by calling /api/generate-view for each view (Edge Runtime, no 10s limit).
+ * Analyzes the floor plan and returns a task list for the client.
+ * Does NOT generate any images — the client calls /api/generate-view
+ * for each view with all needed data (self-contained, no in-memory store).
  *
- * For legacy pipeline: runs analyzeFloorPlan (fast, ~3-5s with detail:'low').
- * For 3D pipeline: just queues beautification tasks.
+ * This avoids the Vercel serverless instance problem where generate-view
+ * would land on a different container and lose the in-memory job data.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -32,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { sessionId, imageData, rooms, renderedViews } = body;
+    const { sessionId, imageData, rooms } = body;
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Keine Session-ID' }, { status: 400 });
@@ -40,24 +38,6 @@ export async function POST(request: NextRequest) {
 
     if (!rooms || !Array.isArray(rooms) || rooms.length === 0) {
       return NextResponse.json({ error: 'Keine Räume übergeben' }, { status: 400 });
-    }
-
-    // Check if job already exists
-    const existingJob = getJob(sessionId);
-    if (existingJob) {
-      return NextResponse.json({
-        status: existingJob.status,
-        totalViews: existingJob.tasks.length,
-        completedViews: existingJob.results.length,
-        tasks: existingJob.tasks.map((t, i) => ({
-          index: i,
-          roomId: t.roomId,
-          roomName: t.roomName,
-          viewType: t.viewType,
-          viewLabel: t.viewLabel,
-          completed: i < existingJob.results.length,
-        })),
-      });
     }
 
     // Verify payment in production
@@ -69,90 +49,45 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── Determine pipeline mode ──
-    const is3DPipeline = renderedViews && Array.isArray(renderedViews) && renderedViews.length > 0;
+    if (!imageData) {
+      return NextResponse.json({ error: 'Kein Bild übergeben' }, { status: 400 });
+    }
 
-    if (is3DPipeline) {
-      // ═══════════════════════════════════════════
-      // 3D PIPELINE: Client sent pre-rendered views
-      // ═══════════════════════════════════════════
+    const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData;
 
-      const tasks: GenerationTask[] = [];
-      for (const rv of renderedViews as { roomId: string; viewType: string; imageData: string }[]) {
-        const room = rooms.find((r: { id: string }) => r.id === rv.roomId);
-        if (!room) continue;
+    // Step 1: Analyze floor plan (fast, ~3-5s with detail:'low')
+    let analysis = '';
+    try {
+      analysis = await analyzeFloorPlan(base64);
+    } catch (err) {
+      console.warn('Analysis failed, continuing without:', err);
+    }
 
-        const viewLabel = VIEWS.find((v) => v.type === rv.viewType)?.label || rv.viewType;
+    // Build task list — client will send each task to /api/generate-view
+    const tasks = [];
+    let taskIndex = 0;
+    for (const room of rooms) {
+      for (const view of VIEWS) {
         tasks.push({
-          roomId: rv.roomId,
+          index: taskIndex++,
+          roomId: room.id,
           roomName: room.name,
           roomDescription: room.description || '',
           roomType: room.type,
           style: room.style,
-          viewType: rv.viewType,
-          viewLabel,
-          taskType: 'beautify',
-          renderedImageData: rv.imageData,
+          viewType: view.type,
+          viewLabel: view.label,
         });
       }
-
-      // Create job — no image generation here
-      createJob(sessionId, '', tasks);
-      updateJob(sessionId, { status: 'generating' });
-
-    } else {
-      // ═══════════════════════════════════════════
-      // LEGACY PIPELINE: Generate from floor plan
-      // ═══════════════════════════════════════════
-
-      if (!imageData) {
-        return NextResponse.json({ error: 'Kein Bild übergeben' }, { status: 400 });
-      }
-
-      const tasks: GenerationTask[] = [];
-      for (const room of rooms) {
-        for (const view of VIEWS) {
-          tasks.push({
-            roomId: room.id,
-            roomName: room.name,
-            roomDescription: room.description || '',
-            roomType: room.type,
-            style: room.style,
-            viewType: view.type,
-            viewLabel: view.label,
-            taskType: 'generate',
-          });
-        }
-      }
-
-      const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData;
-      createJob(sessionId, base64, tasks);
-      updateJob(sessionId, { status: 'analyzing' });
-
-      // Step 1: Analyze floor plan (fast, ~3-5s with detail:'low')
-      let analysis = '';
-      try {
-        analysis = await analyzeFloorPlan(base64);
-      } catch (err) {
-        console.warn('Analysis failed, continuing without:', err);
-      }
-      updateJob(sessionId, { analysis, status: 'generating' });
     }
 
-    // Return job info with task list for client to drive generation
-    const job = getJob(sessionId)!;
+    // Return analysis + task list. Client stores this and sends per-view.
     return NextResponse.json({
-      status: job.status,
-      totalViews: job.tasks.length,
-      completedViews: job.results.length,
-      tasks: job.tasks.map((t, i) => ({
-        index: i,
-        roomId: t.roomId,
-        roomName: t.roomName,
-        viewType: t.viewType,
-        viewLabel: t.viewLabel,
-        completed: false,
-      })),
+      status: 'generating',
+      analysis,
+      imageBase64: base64,
+      totalViews: tasks.length,
+      tasks,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unbekannter Fehler';

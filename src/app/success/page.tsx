@@ -19,23 +19,23 @@ interface TaskInfo {
   index: number;
   roomId: string;
   roomName: string;
+  roomDescription: string;
+  roomType: string;
+  style: string;
   viewType: string;
   viewLabel: string;
-  completed: boolean;
 }
 
 interface KickoffResponse {
   status: string;
+  analysis: string;
+  imageBase64: string;
   totalViews: number;
-  completedViews: number;
   tasks: TaskInfo[];
   error?: string;
 }
 
 interface GenerateViewResponse {
-  status: string;
-  completedViews: number;
-  totalViews: number;
   viewGenerated?: {
     roomId: string;
     roomName: string;
@@ -112,8 +112,8 @@ function SuccessContent() {
   );
 
   // ── Main generation pipeline ──
-  // Client drives generation by calling /api/generate-view for each task sequentially.
-  // This avoids Vercel Hobby 10s timeout because each call uses maxDuration=300.
+  // Client drives generation by calling /api/generate-view for each task.
+  // Each call is self-contained (sends all data), no in-memory store dependency.
   useEffect(() => {
     if (!sessionId || hasStarted.current) return;
     if (!previewUrl) return;
@@ -126,7 +126,7 @@ function SuccessContent() {
 
     const runPipeline = async () => {
       try {
-        // Step 1: Kickoff — create job + analyze floor plan (~3-5s)
+        // Step 1: Kickoff — analyze floor plan, get task list (~3-5s)
         let compressedImage: string;
         try {
           compressedImage = await compressImageDataUrl(previewUrl);
@@ -160,13 +160,15 @@ function SuccessContent() {
         }
 
         const kickoffData: KickoffResponse = await kickoffRes.json();
-        const tasks = kickoffData.tasks || [];
+        const { analysis, imageBase64, tasks } = kickoffData;
         setTotalViews(tasks.length);
         setGenerationStatus('beautifying');
 
-        // Step 2: Generate each view sequentially
-        // Each call takes 20-60s but uses maxDuration=300, bypassing 10s limit.
+        // Step 2: Generate each view sequentially.
+        // Each call sends ALL data needed (self-contained, no server-side state).
+        // Uses maxDuration=300 (Fluid Compute) → up to 5 min per view.
         let completed = 0;
+        let successCount = 0;
 
         for (const task of tasks) {
           setCurrentGeneratingView(
@@ -178,15 +180,21 @@ function SuccessContent() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                sessionId,
-                taskIndex: task.index,
+                imageBase64,
+                analysis,
+                roomId: task.roomId,
+                roomName: task.roomName,
+                roomDescription: task.roomDescription,
+                roomType: task.roomType,
+                style: task.style,
+                viewType: task.viewType,
+                viewLabel: task.viewLabel,
               }),
             });
 
             if (!viewRes.ok) {
               const contentType = viewRes.headers.get('content-type') || '';
               if (viewRes.status === 504 || viewRes.status === 502 || !contentType.includes('application/json')) {
-                // Timeout — skip this view, continue with next
                 console.warn(`View ${task.index} timed out, skipping...`);
                 completed++;
                 setCompletedViews(completed);
@@ -209,40 +217,28 @@ function SuccessContent() {
                 viewLabel: viewData.viewGenerated.viewLabel,
                 imageData: viewData.viewGenerated.imageData,
               });
+              successCount++;
             }
 
             completed++;
             setCompletedViews(completed);
 
           } catch (err) {
-            // Network error for this view — skip and continue
             console.warn(`View ${task.index} error:`, err);
             completed++;
             setCompletedViews(completed);
           }
         }
 
-        // Step 3: All done — check final status from server
-        try {
-          const statusRes = await fetch(`/api/generation-status?session_id=${sessionId}`);
-          if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            if (statusData.results && statusData.results.length > 0) {
-              // Process any results we might have missed
-              for (const r of statusData.results as { roomId: string; roomName: string; viewType: string; viewLabel: string; imageData: string }[]) {
-                const existing = roomViewsRef.current.get(r.roomId);
-                const alreadyHasView = existing?.views.some((v) => v.type === r.viewType);
-                if (!alreadyHasView) {
-                  processGeneratedView(r);
-                }
-              }
-            }
-          }
-        } catch {
-          // Status check failed — not critical
+        // Step 3: All done
+        if (successCount > 0) {
+          setCompleted();
+        } else {
+          setError(
+            'Leider konnten keine Bilder generiert werden. ' +
+            'Bitte versuche es erneut oder wähle weniger Räume.'
+          );
         }
-
-        setCompleted();
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Ein Fehler ist aufgetreten';

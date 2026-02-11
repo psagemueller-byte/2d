@@ -1,33 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * Password protection for:
- * 1. Entire app during beta/testing (BETA_PASSWORD)
- * 2. Admin routes (/admin/*) with separate password (GALLERY_ADMIN_PASSWORD)
- *
- * Set these environment variables on Vercel:
- *   BETA_PASSWORD=dein-geheimes-passwort
- *   GALLERY_ADMIN_PASSWORD=admin-passwort
- *
- * To disable beta protection (go public), remove the BETA_PASSWORD env var.
- * Admin protection stays active as long as GALLERY_ADMIN_PASSWORD is set.
+ * Password protection for the entire app.
  *
  * Uses HTTP Basic Auth — browser shows a native login popup.
- * Username can be anything, only the password matters.
+ * Both username AND password must match exactly.
+ *
+ * Credentials are stored in environment variables on Vercel:
+ *   SITE_USERNAME=...
+ *   SITE_PASSWORD=...
+ *
+ * Admin routes have separate protection via GALLERY_ADMIN_PASSWORD.
+ *
+ * SECURITY: All credentials are validated with constant-time comparison
+ * to prevent timing attacks. No prompt injection possible — credentials
+ * come only from environment variables, never from user input or page content.
  */
 
-function checkBasicAuth(request: NextRequest, password: string): boolean {
+// Constant-time string comparison to prevent timing attacks
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+function checkBasicAuth(
+  request: NextRequest,
+  expectedUsername: string,
+  expectedPassword: string
+): boolean {
   const authHeader = request.headers.get('authorization');
+  if (!authHeader || !authHeader.startsWith('Basic ')) return false;
 
-  if (!authHeader) return false;
-
-  const base64 = authHeader.split(' ')[1];
+  const base64 = authHeader.slice(6); // Remove "Basic "
   if (!base64) return false;
 
   try {
     const decoded = atob(base64);
-    const providedPassword = decoded.split(':')[1];
-    return providedPassword === password;
+    const colonIndex = decoded.indexOf(':');
+    if (colonIndex === -1) return false;
+
+    const username = decoded.slice(0, colonIndex);
+    const password = decoded.slice(colonIndex + 1);
+
+    return safeCompare(username, expectedUsername) && safeCompare(password, expectedPassword);
   } catch {
     return false;
   }
@@ -36,69 +55,64 @@ function checkBasicAuth(request: NextRequest, password: string): boolean {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // --- Admin route protection ---
-  if (pathname.startsWith('/admin')) {
-    const adminPassword = process.env.GALLERY_ADMIN_PASSWORD;
-
-    // No admin password set = admin routes are inaccessible
-    if (!adminPassword) {
-      return new NextResponse('Admin-Zugang nicht konfiguriert.', {
-        status: 403,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
-    }
-
-    if (checkBasicAuth(request, adminPassword)) {
-      return NextResponse.next();
-    }
-
-    return new NextResponse('Admin-Zugang — bitte Passwort eingeben.', {
-      status: 401,
-      headers: {
-        'WWW-Authenticate': 'Basic realm="RoomVision Admin"',
-        'Content-Type': 'text/plain; charset=utf-8',
-      },
-    });
-  }
-
-  // --- Admin API protection ---
-  if (pathname.startsWith('/api/admin')) {
+  // --- Admin route protection (separate credentials) ---
+  if (pathname.startsWith('/admin') || pathname.startsWith('/api/admin')) {
     const adminPassword = process.env.GALLERY_ADMIN_PASSWORD;
 
     if (!adminPassword) {
-      return NextResponse.json({ error: 'Admin not configured' }, { status: 403 });
+      return pathname.startsWith('/api/')
+        ? NextResponse.json({ error: 'Admin not configured' }, { status: 403 })
+        : new NextResponse('Admin-Zugang nicht konfiguriert.', {
+            status: 403,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          });
     }
 
-    if (checkBasicAuth(request, adminPassword)) {
-      return NextResponse.next();
+    // Admin uses password-only check (any username)
+    const authHeader = request.headers.get('authorization');
+    let adminAuthorized = false;
+    if (authHeader?.startsWith('Basic ')) {
+      try {
+        const decoded = atob(authHeader.slice(6));
+        const password = decoded.slice(decoded.indexOf(':') + 1);
+        adminAuthorized = safeCompare(password, adminPassword);
+      } catch {
+        adminAuthorized = false;
+      }
     }
 
-    return new NextResponse('Unauthorized', {
-      status: 401,
-      headers: {
-        'WWW-Authenticate': 'Basic realm="RoomVision Admin API"',
-        'Content-Type': 'text/plain; charset=utf-8',
-      },
-    });
+    if (adminAuthorized) return NextResponse.next();
+
+    return new NextResponse(
+      pathname.startsWith('/api/') ? 'Unauthorized' : 'Admin-Zugang — bitte Passwort eingeben.',
+      {
+        status: 401,
+        headers: {
+          'WWW-Authenticate': 'Basic realm="RoomVision Admin"',
+          'Content-Type': 'text/plain; charset=utf-8',
+        },
+      }
+    );
   }
 
-  // --- Beta protection for the rest of the app ---
-  const betaPassword = process.env.BETA_PASSWORD;
+  // --- Site-wide protection (username + password) ---
+  const siteUsername = process.env.SITE_USERNAME;
+  const sitePassword = process.env.SITE_PASSWORD;
 
-  // No beta password set = app is public (production mode)
-  if (!betaPassword) {
+  // No credentials configured = app is public
+  if (!siteUsername || !sitePassword) {
     return NextResponse.next();
   }
 
-  if (checkBasicAuth(request, betaPassword)) {
+  if (checkBasicAuth(request, siteUsername, sitePassword)) {
     return NextResponse.next();
   }
 
   // Return 401 with Basic Auth challenge
-  return new NextResponse('Zugang geschützt — bitte Passwort eingeben.', {
+  return new NextResponse('Zugang geschützt — bitte Benutzername und Passwort eingeben.', {
     status: 401,
     headers: {
-      'WWW-Authenticate': 'Basic realm="RoomVision Beta"',
+      'WWW-Authenticate': 'Basic realm="RoomVision"',
       'Content-Type': 'text/plain; charset=utf-8',
     },
   });
@@ -107,13 +121,6 @@ export function middleware(request: NextRequest) {
 // Protect ALL routes except Next.js internals and static files
 export const config = {
   matcher: [
-    /*
-     * Match all paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
-     * - favicon.ico
-     * - public files (images, etc.)
-     */
     '/((?!_next/static|_next/image|favicon\\.ico|.*\\.svg|.*\\.png|.*\\.jpg|.*\\.ico).*)',
   ],
 };
